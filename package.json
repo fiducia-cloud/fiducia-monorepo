@@ -1,0 +1,20 @@
+{
+  "name": "@fiducia/e2e",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Cross-cluster end-to-end + conformance test suite for fiducia.cloud. Node --test specs exercising every coordination primitive plus a multi-cluster quorum/chaos layer. Skips cleanly when no endpoint is configured.",
+  "scripts": {
+    "test": "node --test",
+    "test:conformance": "node --test 'tests/conformance/**/*.test.mjs'",
+    "test:chaos": "node --test 'tests/chaos/**/*.test.mjs'",
+    "test:smoke": "node --test tests/smoke.test.mjs",
+    "lint": "node scripts/lint.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "@fiducia/test-config": "file:../fiducia-test-config"
+  }
+}

@@ -1,0 +1,115 @@
+# fiducia-e2e
+
+Cross-cluster **end-to-end + conformance** test suite for
+[fiducia.cloud](https://fiducia.cloud) — the Raft-replicated coordination
+service. This repo is the black-box companion to the per-repo unit tests: it
+drives the **real HTTP contract** (`fiducia-clients/PROTOCOL.md`) against a
+running deployment and asserts that every coordination primitive behaves
+correctly, then adds a **multi-cluster quorum / chaos** layer on top.
+
+It follows the org test convention: Node's built-in runner (`node --test`),
+ESM `.mjs`, dependency-light (global `fetch` + `node:test` + `node:assert`), with
+[`@fiducia/test-config`](../fiducia-test-config) as the only devDependency.
+
+## Two run modes (via env)
+
+| Mode | How | When |
+|------|-----|------|
+| **(a) LOCAL / kind multi-cluster** | `FIDUCIA_E2E_ENDPOINTS` points at the three local kind cluster LBs | CI default for the full run (see `.github/workflows/ci.yml`, `kind-cluster-e2e` job) |
+| **(b) real cloud endpoints** | `FIDUCIA_E2E_ENDPOINTS` = the comma-separated `lb_endpoint` URLs from [`fiducia-infra/topology.toml`](../fiducia-infra/topology.toml) | pointing the suite at a live prod/staging deployment |
+
+## Environment variables
+
+| Var | Meaning |
+|-----|---------|
+| `FIDUCIA_E2E_BASE_URL` | single endpoint for a smoke run (e.g. `https://gcp.lb.fiducia.cloud`) |
+| `FIDUCIA_E2E_ENDPOINTS` | comma-separated list of cluster LB URLs for multi-cluster / chaos (e.g. `https://gcp.lb.fiducia.cloud,https://aws.lb.fiducia.cloud,https://hetzner.lb.fiducia.cloud`) |
+| `FIDUCIA_E2E_API_KEY` | optional; sent as `Authorization: Bearer <key>` on every request |
+| `FIDUCIA_E2E_ALLOW_DISRUPTIVE` | `1` to enable the gated kill-a-cluster chaos flow (still a no-op stub in this repo — see below) |
+
+Endpoint resolution order (`src/endpoints.mjs`): `FIDUCIA_E2E_ENDPOINTS` →
+`FIDUCIA_E2E_BASE_URL` → **none** (every suite skips).
+
+## Skips cleanly with nothing deployed
+
+> **Running `npm test` with nothing configured is safe and exits 0.**
+
+When no endpoint is set, every suite is **skipped, not failed** — so the default
+CI push/PR job passes on a clean checkout and simply proves the specs load,
+parse, and skip. Two further resilience rules keep the suite honest:
+
+- A route that returns **404/501** (primitive not deployed on this build — e.g.
+  reader-writer locks, which `PROTOCOL.md` marks as a not-yet-live client
+  extension) is recorded as a **skip**, not a failure.
+- A **wrong** behavior — two holders of a mutex, a split-brain election, a
+  duplicate cron run, a stale-CAS overwrite — always **FAILS**.
+
+## Test layers
+
+```
+tests/
+  smoke.test.mjs            /healthz + /v1/status reachability (primary endpoint)
+  conformance/              per-primitive correctness (one file per family)
+    locks.test.mjs          mutual exclusion, union all-or-nothing, monotonic fencing
+    semaphores.test.mjs     up to `limit` holders, limit+1 refused, release admits next
+    rwlocks.test.mjs        concurrent readers; writer excludes readers & vice-versa
+    idempotency.test.mjs    first claim vs duplicate replay; complete + fencing
+    ratelimit.test.mjs      N within budget pass, N+1 rejected; fresh key full budget
+    cron.test.mjs           schedule upsert/read; exactly-once run-record dedup
+    kv.test.mjs             put/get + monotonic version; stale CAS fails; watch SSE
+    elections.test.mjs      one winner, second sees leader; renew fencing; not_leader
+    discovery.test.mjs      register→resolve; metadata filter narrows; deregister drops
+  chaos/
+    cluster-failure.test.mjs multi-cluster quorum + cross-cluster linearizability
+  helpers.mjs               shared skip/uniqueKey helpers (not a test file)
+src/
+  client.mjs                fetch-based client mirroring PROTOCOL.md routes
+  endpoints.mjs             env → endpoint list; endpoints() / primary()
+```
+
+Each conformance file frames the invariant with the real-world use case it
+protects (Terraform state locks, Stripe webhook dedup, LLM spend caps, canary
+member sets, active/standby failover, …) in comments.
+
+## The chaos layer
+
+`tests/chaos/cluster-failure.test.mjs` encodes the fiducia-infra guarantee:
+**one shard replica per cluster (RF=3), so losing any one cluster keeps a 2/3
+quorum serving** (see [`fiducia-infra/README.md`](../fiducia-infra/README.md)).
+With `FIDUCIA_E2E_ENDPOINTS` listing ≥3 cluster LBs it asserts:
+
+- **(a)** every endpoint's `/v1/status` reports a healthy quorum;
+- **(b)** a lock acquired via endpoint **A** is observable (and still exclusive)
+  via endpoint **B** — cross-cluster linearizability, because all lock state is
+  a single Raft group;
+- **(c)** a **documented, gated** kill-a-cluster flow: with
+  `FIDUCIA_E2E_ALLOW_DISRUPTIVE=1` it drives a `disruptCluster` hook (a **no-op
+  stub** here) that a real infra harness would wire to `kubectl`/kind teardown,
+  proving the pre-existing lock stays observable and a new lock still commits on
+  the surviving 2/3, then heals. **This repo never actually kills anything.**
+
+Fewer than 3 endpoints → the chaos suite skips.
+
+## Run
+
+```sh
+npm install                 # @fiducia/test-config is a sibling file: dep
+npm test                    # everything (skips cleanly with no endpoint)
+npm run test:conformance    # just tests/conformance/
+npm run test:chaos          # just tests/chaos/
+npm run test:smoke          # just the reachability smoke
+npm run lint                # ESM syntax check (dependency-light, no ESLint)
+
+# Point at a live deployment:
+FIDUCIA_E2E_ENDPOINTS="https://gcp.lb.fiducia.cloud,https://aws.lb.fiducia.cloud,https://hetzner.lb.fiducia.cloud" \
+FIDUCIA_E2E_API_KEY="$KEY" npm test
+```
+
+Requires Node ≥ 22 (see `.nvmrc`). No `tsconfig` — the org runs plain ESM `.mjs`.
+
+## Related
+
+- [`fiducia-clients`](../fiducia-clients) — `PROTOCOL.md` is the endpoint/method source of truth this suite mirrors.
+- [`fiducia-node.rs`](../fiducia-node.rs) — the coordination engine and `/v1` route semantics.
+- [`fiducia-infra`](../fiducia-infra) — multi-cluster topology; the kind tier is the intended local target for the full CI run.
+- [`fiducia-test-config`](../fiducia-test-config) — shared `node --test` harness + presets.
