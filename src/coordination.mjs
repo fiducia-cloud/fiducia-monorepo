@@ -126,6 +126,9 @@ async function startProcess({ name, command, args = [], env = {}, url, readyPath
     /** SIGKILL the whole tree immediately (crash simulation). */
     kill: () => killTree("SIGKILL"),
     stop: async () => {
+      // Already exited (e.g. crashed on purpose): nothing to wait for — and
+      // `child.once("exit")` would never fire again.
+      if (child.exitCode !== null || child.signalCode !== null) return;
       killTree("SIGTERM");
       const gone = await Promise.race([
         new Promise((resolvePromise) => child.once("exit", () => resolvePromise(true))),
