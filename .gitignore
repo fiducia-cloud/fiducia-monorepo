@@ -3,3 +3,21 @@ generated/
 *.log
 .DS_Store
 coverage/
+
+# --- hardened baseline (auto) ---
+Thumbs.db
+*.swp
+*~
+tmp/
+.direnv/
+.env
+.env.*
+!.env.example
+dist/
+.next/
+.astro/
+.cache/
+*.tsbuildinfo
+pkg/
+pkg-node/
+*-debug.log*
