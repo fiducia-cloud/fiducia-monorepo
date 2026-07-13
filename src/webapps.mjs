@@ -190,6 +190,8 @@ export async function bootWebAppStack() {
       env: {
         ...fiduciaAuthStubEnv(supabase, kv),
         FIDUCIA_INTROSPECT_SECRET: "e2e-introspect-secret",
+        // Required at boot since efeaebe: fiducia-auth signs its KV requests.
+        FIDUCIA_INTERNAL_SECRET: "e2e-internal-secret",
       },
       readyPath: "/healthz",
       reuseUrlEnv: "FIDUCIA_AUTH_TEST_URL",
