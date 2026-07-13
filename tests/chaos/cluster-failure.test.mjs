@@ -21,7 +21,7 @@ import assert from "node:assert/strict";
 
 import { FiduciaClient, output } from "../../src/client.mjs";
 import { endpoints, apiKey } from "../../src/endpoints.mjs";
-import { uniqueKey, uniqueId, skipIfUndeployed } from "../helpers.mjs";
+import { assertHealthyNodeStatus, uniqueKey, uniqueId, skipIfUndeployed } from "../helpers.mjs";
 import {
   disruptCluster as disruptWithKubectl,
   healCluster as healWithKubectl
@@ -36,26 +36,13 @@ function clientFor(url) {
   return new FiduciaClient(url, { apiKey: apiKey() });
 }
 
-// Best-effort quorum health read. /v1/status is {service, consensus, ...}; the
-// exact per-shard health shape isn't pinned in PROTOCOL.md, so we accept the
-// endpoint as healthy if it answers 2xx and, where present, does not report an
-// explicit unhealthy/no-quorum flag. VERIFY against PROTOCOL.md / fiducia-node
-// once the /v1/status schema is fixed.
-function looksHealthy(status) {
-  if (!status || typeof status !== "object") return false;
-  if (status.healthy === false) return false;
-  if (status.quorum === false) return false;
-  if (typeof status.status === "string" && ["unhealthy", "down", "no_quorum"].includes(status.status.toLowerCase())) {
-    return false;
-  }
-  return true;
-}
-
 async function chaosHookAction(action, cluster) {
   const base = process.env.FIDUCIA_E2E_CHAOS_HOOK_URL?.trim();
   const token = process.env.FIDUCIA_E2E_CHAOS_HOOK_TOKEN?.trim();
   assert.ok(base, "FIDUCIA_E2E_CHAOS_HOOK_URL is required for hook-based chaos");
   assert.ok(token, "FIDUCIA_E2E_CHAOS_HOOK_TOKEN is required for hook-based chaos");
+  const hook = new URL(base);
+  assert.equal(hook.protocol, "https:", "credential-bearing chaos hooks require HTTPS");
   const response = await fetch(base, {
     method: "POST",
     headers: {
@@ -92,7 +79,7 @@ describe("chaos / cross-cluster quorum", { skip: MULTI }, () => {
     await skipIfUndeployed(t, "GET /v1/status (all endpoints)", async () => {
       for (const url of eps) {
         const status = await clientFor(url).status();
-        assert.ok(looksHealthy(status), `endpoint ${url} should report a healthy quorum`);
+        assertHealthyNodeStatus(status, `endpoint ${url}`);
       }
     });
   });
@@ -114,9 +101,8 @@ describe("chaos / cross-cluster quorum", { skip: MULTI }, () => {
       // must refuse a second acquire.
       const view = await b.lockGet(key);
       const lock = view?.lock ?? output(view);
-      if (lock && lock.holder !== undefined) {
-        assert.equal(lock.holder, holder, "endpoint B must observe the same holder");
-      }
+      assert.ok(lock && typeof lock === "object", "endpoint B must return the lock record");
+      assert.equal(lock.holder, holder, "endpoint B must observe the same holder");
       const contend = output(await b.tryLock(key, { holder: uniqueId("other"), ttlMs: 30_000 }));
       assert.notEqual(contend.acquired, true, "endpoint B must refuse a lock already held via A");
 
@@ -153,9 +139,8 @@ describe("chaos / cross-cluster quorum", { skip: MULTI }, () => {
         // 4. The pre-existing lock is still observable on a survivor endpoint.
         const view = await survivor.lockGet(key);
         const lock = view?.lock ?? output(view);
-        if (lock && lock.holder !== undefined) {
-          assert.equal(lock.holder, holder, "lock must survive a single-cluster loss (2/3 quorum)");
-        }
+        assert.ok(lock && typeof lock === "object", "survivor must return the lock record");
+        assert.equal(lock.holder, holder, "lock must survive a single-cluster loss (2/3 quorum)");
 
         // 5. A brand-new lock still commits on the surviving 2/3.
         const key2 = uniqueKey("chaos-postkill");

@@ -1,5 +1,8 @@
 name: e2e
 
+permissions:
+  contents: read
+
 # Default push/PR job runs the whole suite with NO cluster deployed. Every suite
 # SKIPS when no endpoint is configured, so this job passes on a clean checkout —
 # it proves the specs load, parse, and skip cleanly.
@@ -15,55 +18,38 @@ jobs:
     name: conformance (no cluster — must skip cleanly)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "22"
-      # @fiducia/test-config is a sibling `file:` devDependency; on this repo
-      # alone that path isn't present, so `npm install` is best-effort and the
-      # suite depends only on Node built-ins (node:test, global fetch).
-      - name: Install (best-effort; specs need only Node built-ins)
-        run: npm install || true
       - name: Lint (ESM syntax check)
         run: node scripts/lint.mjs
       - name: Conformance + smoke (skips with no endpoint)
         run: node --test
 
   # ───────────────────────────────────────────────────────────────────────────
-  # Full cross-cluster run against kind. Manual-only (workflow_dispatch) because
-  # it stands up three local Kubernetes clusters via the sibling fiducia-infra
-  # kind tier. Referenced by path — fiducia-infra/kind and
-  # fiducia-infra/tools/kind-up.sh are being created in parallel; this job names
-  # the intended entrypoint rather than depending on its exact contents.
+  # Real single-cluster conformance against the checked-in kind tier. This does
+  # not claim cross-cluster or failure-domain assurance: the infra harness is one
+  # kind cluster with four labeled zones and one load balancer on port 8090.
   # ───────────────────────────────────────────────────────────────────────────
   kind-cluster-e2e:
-    name: conformance + chaos (kind multi-cluster)
+    name: conformance (single kind cluster)
     runs-on: ubuntu-latest
     if: ${{ github.event_name == 'workflow_dispatch' }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "22"
       - name: Check out fiducia-infra (kind tier)
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           repository: fiducia-cloud/fiducia-infra
           path: fiducia-infra
-      # Stand up the 3-cluster kind topology (one node per cluster => RF=3,
-      # 2-of-3 quorum). Intended entrypoint:
-      #   fiducia-infra/tools/kind-up.sh   (creates kind/ clusters + LBs)
-      - name: Bring up kind multi-cluster
+      - name: Bring up the kind conformance cluster
         run: |
           bash fiducia-infra/tools/kind-up.sh
-          # kind-up.sh is expected to print the three LB URLs; wire them here:
-          echo "FIDUCIA_E2E_ENDPOINTS=http://localhost:8091,http://localhost:8092,http://localhost:8093" >> "$GITHUB_ENV"
-      - name: Install
-        run: npm install || true
+          echo "FIDUCIA_E2E_BASE_URL=http://127.0.0.1:8090" >> "$GITHUB_ENV"
+          echo "FIDUCIA_E2E_ALLOW_INSECURE_LOCALHOST=1" >> "$GITHUB_ENV"
       - name: Conformance
-        run: node --test 'tests/conformance/**/*.test.mjs'
-      - name: Chaos (cross-cluster quorum; non-disruptive)
-        run: node --test 'tests/chaos/**/*.test.mjs'
-        # To exercise the gated kill-a-cluster flow, set:
-        #   FIDUCIA_E2E_ALLOW_DISRUPTIVE=1
-        # and wire tests/chaos disruptCluster to fiducia-infra's kind teardown.
+        run: node --test tests/smoke.test.mjs 'tests/conformance/**/*.test.mjs'
