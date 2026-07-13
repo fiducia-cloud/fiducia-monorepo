@@ -258,6 +258,8 @@ export async function bootCoordinationStack({ shardCount = 4, compactThreshold =
       compactThreshold,
       lbUrl: lb.url,
       nodeUrls: nodes.map((n) => n.url),
+      /** Captured stdout+stderr of a member: "lb" or a node index. */
+      logsOf: (which) => (which === "lb" ? lb.logs() : nodes[which]?.logs()),
       /** SIGKILL node `i`'s whole process tree (simulated crash). */
       crashNode: (i) => nodes[i].kill(),
       /** Reboot node `i` on its surviving data dir; replaces the handle. */
