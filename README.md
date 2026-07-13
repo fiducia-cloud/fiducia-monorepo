@@ -25,7 +25,14 @@ ESM `.mjs`, dependency-light (global `fetch` + `node:test` + `node:assert`), wit
 | `FIDUCIA_E2E_BASE_URL` | single endpoint for a smoke run (e.g. `https://gcp.lb.fiducia.cloud`) |
 | `FIDUCIA_E2E_ENDPOINTS` | comma-separated list of cluster LB URLs for multi-cluster / chaos (e.g. `https://gcp.lb.fiducia.cloud,https://aws.lb.fiducia.cloud,https://hetzner.lb.fiducia.cloud`) |
 | `FIDUCIA_E2E_API_KEY` | optional; sent as `Authorization: Bearer <key>` on every request |
-| `FIDUCIA_E2E_ALLOW_DISRUPTIVE` | `1` to enable the gated kill-a-cluster chaos flow (still a no-op stub in this repo — see below) |
+| `FIDUCIA_E2E_ALLOW_DISRUPTIVE` | `1` to enable the gated cluster-loss flow |
+| `FIDUCIA_E2E_CHAOS_HOOK_URL` | preferred authenticated infra-harness endpoint accepting `{action, cluster}` |
+| `FIDUCIA_E2E_CHAOS_HOOK_TOKEN` | bearer token for the chaos hook |
+| `FIDUCIA_E2E_CHAOS_CONTEXTS` | JSON target-to-kubectl-context map, e.g. `{"hetzner":"fiducia-hetzner"}` |
+| `FIDUCIA_E2E_CHAOS_TARGET` | target name to disrupt (default `hetzner`) |
+| `FIDUCIA_E2E_CHAOS_NAMESPACE` | namespace containing node StatefulSets (default `fiducia`) |
+| `FIDUCIA_E2E_CHAOS_SELECTOR` | node StatefulSet/pod selector (default `app.kubernetes.io/name=fiducia-node`) |
+| `FIDUCIA_E2E_KUBECTL` | kubectl binary path (default `kubectl`) |
 
 Endpoint resolution order (`src/endpoints.mjs`): `FIDUCIA_E2E_ENDPOINTS` →
 `FIDUCIA_E2E_BASE_URL` → **none** (every suite skips).
@@ -82,11 +89,15 @@ With `FIDUCIA_E2E_ENDPOINTS` listing ≥3 cluster LBs it asserts:
 - **(b)** a lock acquired via endpoint **A** is observable (and still exclusive)
   via endpoint **B** — cross-cluster linearizability, because all lock state is
   a single Raft group;
-- **(c)** a **documented, gated** kill-a-cluster flow: with
-  `FIDUCIA_E2E_ALLOW_DISRUPTIVE=1` it drives a `disruptCluster` hook (a **no-op
-  stub** here) that a real infra harness would wire to `kubectl`/kind teardown,
-  proving the pre-existing lock stays observable and a new lock still commits on
-  the surviving 2/3, then heals. **This repo never actually kills anything.**
+- **(c)** a gated cluster-loss flow: with
+  `FIDUCIA_E2E_ALLOW_DISRUPTIVE=1`, it prefers the authenticated infrastructure
+  hook; otherwise an explicit context map lets it scale the selected cluster's
+  matching `fiducia-node` StatefulSets to zero. It confirms the endpoint is
+  unavailable, proves the pre-existing lock stays observable and a new lock
+  still commits on the surviving 2/3, then heals through the same provider.
+
+Disruptive mode changes live Kubernetes workloads. Keep it disabled except in a
+dedicated chaos environment with a verified hook or context mapping and selector.
 
 Fewer than 3 endpoints → the chaos suite skips.
 
