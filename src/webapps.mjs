@@ -11,10 +11,10 @@
 
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { startServer } from "@fiducia/test-config/harness";
@@ -31,6 +31,13 @@ export function repoPath(name) {
   return join(process.env.FIDUCIA_REPOS_ROOT ?? resolve(E2E_ROOT, ".."), name);
 }
 
+function commandOnPath(name) {
+  return (process.env.PATH ?? "")
+    .split(delimiter)
+    .filter(Boolean)
+    .some((dir) => existsSync(join(dir, name)));
+}
+
 /** Why the suite cannot run here, or null if all preconditions hold. */
 export function webAppsSkipReason() {
   if (process.env.FIDUCIA_E2E_WEBAPPS !== "1") {
@@ -39,6 +46,11 @@ export function webAppsSkipReason() {
   for (const repo of ["fiducia-auth.rs", "fiducia-backend.rs", "fiducia-admin.rs", "fiducia-interfaces"]) {
     if (!existsSync(repoPath(repo))) {
       return `sibling checkout ${repo} not found (set FIDUCIA_REPOS_ROOT)`;
+    }
+  }
+  for (const command of ["initdb", "pg_ctl", "createdb", "psql"]) {
+    if (!commandOnPath(command)) {
+      return `PostgreSQL tool ${command} not found on PATH`;
     }
   }
   return null;
@@ -59,6 +71,50 @@ function run(command, args, opts = {}) {
   });
 }
 
+async function availableLoopbackPort() {
+  const server = createServer();
+  await new Promise((resolvePromise, rejectPromise) => {
+    server.once("error", rejectPromise);
+    server.listen(0, "127.0.0.1", resolvePromise);
+  });
+  const address = server.address();
+  const port = typeof address === "object" && address ? address.port : null;
+  await new Promise((resolvePromise, rejectPromise) =>
+    server.close((error) => (error ? rejectPromise(error) : resolvePromise())),
+  );
+  if (!port) throw new Error("failed to allocate a loopback port for scratch Postgres");
+  return port;
+}
+
+/**
+ * Read PostgreSQL's authoritative postmaster PID and probe the process. A
+ * malformed pid file is an error: cleanup must not guess that deletion is safe.
+ */
+export async function postmasterIsAlive(dataDir) {
+  let raw;
+  try {
+    raw = await readFile(join(dataDir, "postmaster.pid"), "utf8");
+  } catch (error) {
+    if (error?.code === "ENOENT") return false;
+    throw error;
+  }
+
+  const firstLine = raw.split(/\r?\n/, 1)[0]?.trim();
+  const pid = Number(firstLine);
+  if (!Number.isSafeInteger(pid) || pid <= 1) {
+    throw new Error(`invalid PostgreSQL postmaster.pid in ${dataDir}`);
+  }
+
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if (error?.code === "ESRCH") return false;
+    if (error?.code === "EPERM") return true;
+    throw error;
+  }
+}
+
 /**
  * A throwaway Postgres in a temp dir (Homebrew initdb/pg_ctl; trust auth,
  * loopback only). `databases` maps database name -> schema .sql to apply.
@@ -66,30 +122,99 @@ function run(command, args, opts = {}) {
 export async function startDisposablePostgres({ databases = {} } = {}) {
   const dir = await mkdtemp(join(tmpdir(), "fiducia-e2e-pg-"));
   const dataDir = join(dir, "data");
-  await run("initdb", ["-D", dataDir, "-A", "trust", "-U", "postgres"]);
-  const port = 21000 + Math.floor(Math.random() * 1000);
-  await run("pg_ctl", [
-    "-D", dataDir,
-    "-o", `-p ${port} -c listen_addresses=127.0.0.1 -c unix_socket_directories=${dir}`,
-    "-l", join(dir, "pg.log"),
-    "-w", "start",
-  ]);
-  const psqlBase = ["-h", "127.0.0.1", "-p", String(port), "-U", "postgres"];
-  for (const [name, schemaSql] of Object.entries(databases)) {
-    await run("createdb", [...psqlBase, name]);
-    if (schemaSql) {
-      await run("psql", [...psqlBase, "-d", name, "-v", "ON_ERROR_STOP=1", "-f", schemaSql]);
-    }
-  }
-  return {
-    port,
-    url: (db) => `postgres://postgres@127.0.0.1:${port}/${db}`,
-    sql: (db, statement) => run("psql", [...psqlBase, "-d", db, "-v", "ON_ERROR_STOP=1", "-c", statement]),
-    stop: async () => {
-      await run("pg_ctl", ["-D", dataDir, "-m", "immediate", "stop"]).catch(() => {});
-      await rm(dir, { recursive: true, force: true });
-    },
+  // Without a valid locale macOS postmaster aborts with "became multithreaded
+  // during startup"; pin C so the scratch instance boots in any environment.
+  const pgEnv = { env: { ...process.env, LC_ALL: "C", LANG: "C" } };
+  let started = false;
+  let cleaned = false;
+  let cleanupPromise;
+  const cleanup = () => {
+    if (cleaned) return Promise.resolve();
+    if (cleanupPromise) return cleanupPromise;
+    cleanupPromise = (async () => {
+      const errors = [];
+      let live;
+      try {
+        live = await postmasterIsAlive(dataDir);
+      } catch (error) {
+        errors.push(error);
+      }
+
+      let stopError;
+      if (live || started) {
+        try {
+          await run("pg_ctl", ["-D", dataDir, "-m", "immediate", "stop"], pgEnv);
+        } catch (error) {
+          stopError = error;
+        }
+      }
+
+      try {
+        live = await postmasterIsAlive(dataDir);
+        started = live;
+      } catch (error) {
+        live = undefined;
+        errors.push(error);
+      }
+      // Never delete a cluster directory if its postmaster failed to stop. A
+      // later cleanup call retries the stop instead of stranding a live process
+      // whose data directory has vanished.
+      if (live === false) {
+        try {
+          await rm(dir, { recursive: true, force: true });
+          cleaned = true;
+        } catch (error) {
+          errors.push(error);
+        }
+      } else if (stopError) {
+        errors.push(stopError);
+      } else if (live === true) {
+        errors.push(new Error("scratch PostgreSQL postmaster is still alive after stop"));
+      }
+      if (errors.length) {
+        throw new AggregateError(errors, "failed to clean up scratch Postgres");
+      }
+    })().finally(() => {
+      cleanupPromise = undefined;
+    });
+    return cleanupPromise;
   };
+
+  try {
+    await run("initdb", ["-D", dataDir, "-A", "trust", "-U", "postgres"], pgEnv);
+    const port = await availableLoopbackPort();
+    await run("pg_ctl", [
+      "-D", dataDir,
+      // TCP-only: macOS caps unix-socket paths at 103 bytes, and deep tmpdirs
+      // (CI, sandboxes) blow past it. All clients connect via -h 127.0.0.1.
+      "-o", `-p ${port} -c listen_addresses=127.0.0.1 -c unix_socket_directories=''`,
+      "-l", join(dir, "pg.log"),
+      "-w", "start",
+    ], pgEnv);
+    // The PID probe remains the cleanup authority if pg_ctl reports an
+    // ambiguous startup error; this flag records the normal successful path.
+    started = true;
+    const psqlBase = ["-h", "127.0.0.1", "-p", String(port), "-U", "postgres"];
+    for (const [name, schemaSql] of Object.entries(databases)) {
+      await run("createdb", [...psqlBase, name], pgEnv);
+      if (schemaSql) {
+        await run("psql", [...psqlBase, "-d", name, "-v", "ON_ERROR_STOP=1", "-f", schemaSql], pgEnv);
+      }
+    }
+    return {
+      port,
+      url: (db) => `postgres://postgres@127.0.0.1:${port}/${db}`,
+      sql: (db, statement) => run("psql", [...psqlBase, "-d", db, "-v", "ON_ERROR_STOP=1", "-c", statement], pgEnv),
+      stop: cleanup,
+    };
+  } catch (error) {
+    try {
+      await cleanup();
+    } catch (cleanupError) {
+      throw new AggregateError([error, cleanupError], "scratch Postgres startup and cleanup failed");
+    }
+    throw error;
+  }
 }
 
 /** Stub fiducia-brain: just enough for the admin /infra surface. */
@@ -140,6 +265,34 @@ export const ORGLESS = {
   app_metadata: {},
 };
 
+/** Stop all successfully cleaned entries in reverse order, retaining failures. */
+export async function stopStackInReverse(stack) {
+  const errors = [];
+  for (let index = stack.length - 1; index >= 0; index -= 1) {
+    try {
+      await stack[index].stop();
+      stack.splice(index, 1);
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  if (errors.length) {
+    throw new AggregateError(errors, "one or more web-app stack services failed to stop");
+  }
+}
+
+/** Coalesce concurrent stops, but allow a failed cleanup to be retried. */
+export function makeRetryableReverseStop(stack) {
+  let stopPromise;
+  return () => {
+    if (stopPromise) return stopPromise;
+    stopPromise = stopStackInReverse(stack).finally(() => {
+      stopPromise = undefined;
+    });
+    return stopPromise;
+  };
+}
+
 /**
  * Boot the whole tier. Returns stubs, service URLs, and stop() (reverse order).
  * A `grant(user)` helper password-grants a Supabase session from the stub the
@@ -147,11 +300,7 @@ export const ORGLESS = {
  */
 export async function bootWebAppStack() {
   const stack = [];
-  const stop = async () => {
-    for (const stoppable of stack.reverse()) {
-      await stoppable.stop();
-    }
-  };
+  const stop = makeRetryableReverseStop(stack);
 
   try {
     const supabase = await startStubSupabase({
@@ -190,9 +339,13 @@ export async function bootWebAppStack() {
       env: {
         ...fiduciaAuthStubEnv(supabase, kv),
         FIDUCIA_INTROSPECT_SECRET: "e2e-introspect-secret",
+        // fiducia-auth signs its KV requests
+        // and HMACs key-mutation idempotency records.
+        FIDUCIA_INTERNAL_SECRET: "e2e-internal-secret",
+        // ≥32 bytes or fiducia-auth refuses to boot (WeakIdempotencySecret).
+        FIDUCIA_KEY_IDEMPOTENCY_SECRET: "e2e-key-idempotency-secret-0123456789abcdef",
       },
       readyPath: "/healthz",
-      reuseUrlEnv: "FIDUCIA_AUTH_TEST_URL",
       startupTimeoutMs: 300000,
     });
     stack.push(auth);
@@ -211,7 +364,6 @@ export async function bootWebAppStack() {
         FIDUCIA_INSECURE_COOKIES: "1",
       },
       readyPath: "/healthz",
-      reuseUrlEnv: "FIDUCIA_ADMIN_TEST_URL",
       startupTimeoutMs: 300000,
     });
     stack.push(admin);
@@ -232,7 +384,6 @@ export async function bootWebAppStack() {
         ...(existsSync(marketingDist) ? { STATIC_DIR: marketingDist } : {}),
       },
       readyPath: "/healthz",
-      reuseUrlEnv: "FIDUCIA_CUSTOMER_TEST_URL",
       startupTimeoutMs: 300000,
     });
     stack.push(backend);
@@ -251,7 +402,11 @@ export async function bootWebAppStack() {
 
     return { supabase, kv, brain, postgres, auth, admin, backend, grant, stop };
   } catch (error) {
-    await stop();
+    try {
+      await stop();
+    } catch (cleanupError) {
+      throw new AggregateError([error, cleanupError], "web-app stack startup and cleanup failed");
+    }
     throw error;
   }
 }

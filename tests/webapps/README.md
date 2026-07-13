@@ -34,7 +34,11 @@ FIDUCIA_E2E_WEBAPPS=1 npm run test:webapps
 # or: npm run test:webapps
 ```
 
-Skips cleanly when `FIDUCIA_E2E_WEBAPPS` is unset or sibling checkouts are
-missing (`FIDUCIA_REPOS_ROOT` overrides the default `..`). `FIDUCIA_AUTH_TEST_URL`
-/ `FIDUCIA_ADMIN_TEST_URL` / `FIDUCIA_CUSTOMER_TEST_URL` reuse already-running
-servers instead of spawning.
+Skips cleanly when `FIDUCIA_E2E_WEBAPPS` is unset, sibling checkouts are missing,
+or the required PostgreSQL tools (`initdb`, `pg_ctl`, `createdb`, `psql`) are not
+on `PATH`; `FIDUCIA_REPOS_ROOT` overrides the default `..`. The three real
+servers are always spawned as one composition so they all point at the same
+ephemeral Supabase/KV/Postgres fixtures; independently reusing an existing
+server would invalidate that isolation guarantee. Teardown probes the scratch
+cluster's `postmaster.pid` before deleting its files, including when startup
+returned an ambiguous error.

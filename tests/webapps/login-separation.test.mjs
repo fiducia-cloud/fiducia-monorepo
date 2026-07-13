@@ -28,20 +28,42 @@ import {
 
 const skip = webAppsSkipReason();
 
+function namedAttribute(html, name, attribute) {
+  const tag = html.match(new RegExp(`<[^>]+name="${name}"[^>]*>`))?.[0];
+  const value = tag?.match(new RegExp(`${attribute}="([^"]+)"`))?.[1];
+  assert.ok(value, `${name} ${attribute} must be present in the rendered page`);
+  return value;
+}
+
 test("web-app login and separation", { skip: skip ?? false, concurrency: false, timeout: 900000 }, async (t) => {
   const stack = await bootWebAppStack();
   t.after(() => stack.stop());
   const { admin, backend, grant } = stack;
 
-  const loginForm = (user, password = user.password) =>
-    fetch(`${admin.url}/login`, {
+  // Login CSRF is a double-submit flow: GET mints a short-lived HttpOnly nonce
+  // cookie and renders its HMAC-bound token. Exercise that real browser contract
+  // rather than posting credentials directly around the protection.
+  const loginForm = async (user, password = user.password) => {
+    const page = await fetch(`${admin.url}/login`);
+    assert.equal(page.status, 200);
+    const csrfToken = namedAttribute(await page.text(), "csrf_token", "value");
+    const csrfCookie = parseSetCookies(page).fiducia_admin_login_csrf;
+    assert.ok(csrfCookie?.value, "login page must mint its CSRF nonce cookie");
+
+    return fetch(`${admin.url}/login`, {
       method: "POST",
       redirect: "manual",
-      headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({ email: user.email, password }),
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+        cookie: `fiducia_admin_login_csrf=${csrfCookie.value}`,
+        origin: admin.url,
+      },
+      body: new URLSearchParams({ csrf_token: csrfToken, email: user.email, password }),
     });
+  };
 
   let operatorCookie;
+  let operatorCsrf;
 
   await t.test("signed-out admin dashboard redirects to /login", async () => {
     const response = await fetch(admin.url, { redirect: "manual" });
@@ -62,7 +84,9 @@ test("web-app login and separation", { skip: skip ?? false, concurrency: false, 
 
     const dashboard = await fetch(admin.url, { headers: { cookie: operatorCookie } });
     assert.equal(dashboard.status, 200);
-    assert.match(await dashboard.text(), /operator|Dashboard/i);
+    const dashboardHtml = await dashboard.text();
+    assert.match(dashboardHtml, /operator|Dashboard/i);
+    operatorCsrf = namedAttribute(dashboardHtml, "fiducia-admin-csrf", "content");
   });
 
   await t.test("customer credentials are valid Supabase logins but CANNOT enter the admin app", async () => {
@@ -87,7 +111,7 @@ test("web-app login and separation", { skip: skip ?? false, concurrency: false, 
       fetch(`${admin.url}/api/admin/sync/infra_operations`, {
         method: "POST",
         headers: { "content-type": "application/json", ...headers },
-        body: JSON.stringify({ op: "upsert", record: { id: "op-e2e" } }),
+        body: JSON.stringify({ id: "op-e2e", op: "upsert" }),
       });
 
     const anonymous = await write();
@@ -103,7 +127,12 @@ test("web-app login and separation", { skip: skip ?? false, concurrency: false, 
     const response = await fetch(`${admin.url}/logout`, {
       method: "POST",
       redirect: "manual",
-      headers: { cookie: operatorCookie },
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+        cookie: operatorCookie,
+        origin: admin.url,
+      },
+      body: new URLSearchParams({ csrf_token: operatorCsrf }),
     });
     assert.equal(response.status, 303);
     const cleared = parseSetCookies(response).fiducia_admin_session;
