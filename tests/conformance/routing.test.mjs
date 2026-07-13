@@ -93,7 +93,7 @@ describe("routing hash pins (cross-language anchor)", () => {
 // 2. Deployed agreement — the cluster must route like the frozen hash says.
 //
 // One org-scoping subtlety: the node commits an org-owned key under its SCOPED
-// form (`{org}{key}` — fiducia_routing::org_scoped_key), so the
+// form (`\u0001{org}\u0001{key}` — fiducia_routing::org_scoped_key), so the
 // exact shard depends on the caller's org id. Coordinator routes (locks,
 // semaphores, service discovery) use cluster-reserved keys and stay exactly
 // predictable for every caller. For org-owned keys the suite always checks
@@ -103,7 +103,7 @@ describe("routing hash pins (cross-language anchor)", () => {
 
 /** fiducia-routing.rs `org_scoped_key`: the key the node actually hashes. */
 function orgScopedKey(orgId, key) {
-  return `${orgId}${key}`;
+  return `\u0001${orgId}\u0001${key}`;
 }
 
 /** The org the configured credential resolves to, when the operator knows it. */
@@ -237,12 +237,19 @@ describe("deployed cluster routes keys like the frozen hash", { skip: NO_ENDPOIN
         const res = await c.kvPut(key, "cross-cluster");
         const shard = shardOf(res);
         if (shard === undefined) continue;
-        assert.equal(shard, shardFor(key, shardCount), `cluster ${url} disagrees with the hash`);
+        if (ORG_ID) {
+          assert.equal(
+            shard,
+            shardFor(orgScopedKey(ORG_ID, key), shardCount),
+            `cluster ${url} disagrees with the org-scoped hash`,
+          );
+        }
         if (!mapped.has(shardCount)) mapped.set(shardCount, new Set());
         mapped.get(shardCount).add(shard);
       }
-      // Clusters with the SAME shard_count must map the key identically —
-      // that is the whole reason the routing crate exists.
+      // Clusters with the SAME shard_count must map the key identically (the
+      // same credential means the same org, so the scoped key is identical
+      // everywhere) — that is the whole reason the routing crate exists.
       for (const [count, shards] of mapped) {
         assert.equal(shards.size, 1, `clusters with shard_count=${count} split the key: ${[...shards]}`);
       }

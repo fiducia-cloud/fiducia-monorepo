@@ -19,6 +19,7 @@ composition uses the sibling `@fiducia/test-config` development harness.
 | **(a) Local single-cluster conformance** | `FIDUCIA_E2E_BASE_URL=http://127.0.0.1:8090` with `FIDUCIA_E2E_ALLOW_INSECURE_LOCALHOST=1` after `fiducia-infra/tools/kind-up.sh` | smoke and primitive conformance only; this cannot prove cross-cluster failover |
 | **(b) Real cross-cluster deployment** | `FIDUCIA_E2E_ENDPOINTS` = three independently routed `lb_endpoint` URLs from [`fiducia-infra/topology.toml`](../fiducia-infra/topology.toml) | staging or production quorum and chaos validation |
 | **(c) Local web/auth composition** | `npm run test:webapps` | boots real auth/admin/backend sibling checkouts against ephemeral stub identity/coordination services and scratch Postgres; proves login and authorization-plane separation without cloud dependencies |
+| **(d) Local coordination composition** | `npm run test:system` | boots a real 3-node `fiducia-node` Raft cluster (durable data dirs) behind a real `fiducia-load-balance` from sibling checkouts; proves LB↔node routing agreement (org-scoped `key → shard`), trusted-hop identity, lock fencing, log compaction, crash failover, and `InstallSnapshot` rejoin — no Docker, no cloud (see [`tests/system/README.md`](tests/system/README.md)) |
 
 The web/auth stack's `stop()` is concurrency-safe and retryable: completed
 cleanup steps are remembered and failed steps remain pending. Scratch Postgres
