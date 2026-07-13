@@ -8,15 +8,15 @@ running deployment and asserts that every coordination primitive behaves
 correctly, then adds a **multi-cluster quorum / chaos** layer on top.
 
 It follows the org test convention: Node's built-in runner (`node --test`),
-ESM `.mjs`, dependency-light (global `fetch` + `node:test` + `node:assert`), with
-[`@fiducia/test-config`](../fiducia-test-config) as the only devDependency.
+ESM `.mjs`, and no third-party packages (global `fetch` + `node:test` +
+`node:assert`).
 
 ## Two run modes (via env)
 
 | Mode | How | When |
 |------|-----|------|
-| **(a) LOCAL / kind multi-cluster** | `FIDUCIA_E2E_ENDPOINTS` points at the three local kind cluster LBs | CI default for the full run (see `.github/workflows/ci.yml`, `kind-cluster-e2e` job) |
-| **(b) real cloud endpoints** | `FIDUCIA_E2E_ENDPOINTS` = the comma-separated `lb_endpoint` URLs from [`fiducia-infra/topology.toml`](../fiducia-infra/topology.toml) | pointing the suite at a live prod/staging deployment |
+| **(a) Local single-cluster conformance** | `FIDUCIA_E2E_BASE_URL=http://127.0.0.1:8090` with `FIDUCIA_E2E_ALLOW_INSECURE_LOCALHOST=1` after `fiducia-infra/tools/kind-up.sh` | smoke and primitive conformance only; this cannot prove cross-cluster failover |
+| **(b) Real cross-cluster deployment** | `FIDUCIA_E2E_ENDPOINTS` = three independently routed `lb_endpoint` URLs from [`fiducia-infra/topology.toml`](../fiducia-infra/topology.toml) | staging or production quorum and chaos validation |
 
 ## Environment variables
 
@@ -25,6 +25,9 @@ ESM `.mjs`, dependency-light (global `fetch` + `node:test` + `node:assert`), wit
 | `FIDUCIA_E2E_BASE_URL` | single endpoint for a smoke run (e.g. `https://gcp.lb.fiducia.cloud`) |
 | `FIDUCIA_E2E_ENDPOINTS` | comma-separated list of cluster LB URLs for multi-cluster / chaos (e.g. `https://gcp.lb.fiducia.cloud,https://aws.lb.fiducia.cloud,https://hetzner.lb.fiducia.cloud`) |
 | `FIDUCIA_E2E_API_KEY` | optional; sent as `Authorization: Bearer <key>` on every request |
+| `FIDUCIA_E2E_RUN_ID` | optional high-entropy namespace for durable test keys; defaults to the GitHub run/attempt or a random UUID |
+| `FIDUCIA_E2E_ALLOW_INSECURE_LOCALHOST` | `1` permits plain HTTP only for localhost/loopback harnesses; all other endpoints require HTTPS |
+| `FIDUCIA_E2E_TIMEOUT_MS` | per-request timeout in milliseconds (default `15000`) |
 | `FIDUCIA_E2E_ALLOW_DISRUPTIVE` | `1` to enable the gated cluster-loss flow |
 | `FIDUCIA_E2E_CHAOS_HOOK_URL` | preferred authenticated infra-harness endpoint accepting `{action, cluster}` |
 | `FIDUCIA_E2E_CHAOS_HOOK_TOKEN` | bearer token for the chaos hook |
@@ -41,9 +44,10 @@ Endpoint resolution order (`src/endpoints.mjs`): `FIDUCIA_E2E_ENDPOINTS` →
 
 > **Running `npm test` with nothing configured is safe and exits 0.**
 
-When no endpoint is set, every suite is **skipped, not failed** — so the default
-CI push/PR job passes on a clean checkout and simply proves the specs load,
-parse, and skip. Two further resilience rules keep the suite honest:
+When no endpoint is set, operational suites are **skipped, not failed** — so the
+default CI push/PR job is only a parser, unit-test, and clean-skip sentinel. It
+does not prove a deployment is ready. Two further resilience rules keep a
+configured run honest:
 
 - A route that returns **404/501** (primitive not deployed on this build — e.g.
   reader-writer locks, which `PROTOCOL.md` marks as a not-yet-live client
@@ -99,17 +103,23 @@ With `FIDUCIA_E2E_ENDPOINTS` listing ≥3 cluster LBs it asserts:
 Disruptive mode changes live Kubernetes workloads. Keep it disabled except in a
 dedicated chaos environment with a verified hook or context mapping and selector.
 
-Fewer than 3 endpoints → the chaos suite skips.
+Fewer than 3 independently routed endpoints → the chaos suite skips. The local
+kind harness is one cluster with multiple labeled zones, so it is intentionally
+used only for smoke and conformance in CI.
 
 ## Run
 
 ```sh
-npm install                 # @fiducia/test-config is a sibling file: dep
 npm test                    # everything (skips cleanly with no endpoint)
 npm run test:conformance    # just tests/conformance/
 npm run test:chaos          # just tests/chaos/
 npm run test:smoke          # just the reachability smoke
 npm run lint                # ESM syntax check (dependency-light, no ESLint)
+
+# Local kind conformance (one cluster; no cross-cluster assurance):
+bash ../fiducia-infra/tools/kind-up.sh
+FIDUCIA_E2E_BASE_URL=http://127.0.0.1:8090 \
+FIDUCIA_E2E_ALLOW_INSECURE_LOCALHOST=1 npm test
 
 # Point at a live deployment:
 FIDUCIA_E2E_ENDPOINTS="https://gcp.lb.fiducia.cloud,https://aws.lb.fiducia.cloud,https://hetzner.lb.fiducia.cloud" \
@@ -118,9 +128,21 @@ FIDUCIA_E2E_API_KEY="$KEY" npm test
 
 Requires Node ≥ 22 (see `.nvmrc`). No `tsconfig` — the org runs plain ESM `.mjs`.
 
+## Security posture
+
+No credentials are baked into the suite. Every secret is read from the
+environment at run time — `FIDUCIA_E2E_API_KEY` (sent only to HTTPS endpoints,
+apart from an explicitly enabled loopback harness, and never followed across a redirect),
+`FIDUCIA_E2E_CHAOS_HOOK_TOKEN`, and the chaos context/selector vars — and the
+fixtures use only ephemeral, run-namespaced keys (`uniqueKey()` helpers backed by
+an explicit run ID or random UUID), never real tenant data. There are no `.env` files or hardcoded tokens in `tests/` or
+`src/`. Disruptive chaos that mutates live Kubernetes workloads stays gated
+behind `FIDUCIA_E2E_ALLOW_DISRUPTIVE=1` plus an explicit hook/context mapping.
+The suite has no third-party packages, so its CI does not run an install step or
+execute package lifecycle scripts.
+
 ## Related
 
 - [`fiducia-clients`](../fiducia-clients) — `PROTOCOL.md` is the endpoint/method source of truth this suite mirrors.
 - [`fiducia-node.rs`](../fiducia-node.rs) — the coordination engine and `/v1` route semantics.
-- [`fiducia-infra`](../fiducia-infra) — multi-cluster topology; the kind tier is the intended local target for the full CI run.
-- [`fiducia-test-config`](../fiducia-test-config) — shared `node --test` harness + presets.
+- [`fiducia-infra`](../fiducia-infra) — multi-cluster topology; the single-cluster kind tier is the local conformance target.

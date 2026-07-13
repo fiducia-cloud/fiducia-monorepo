@@ -13,8 +13,5 @@
   },
   "engines": {
     "node": ">=22"
-  },
-  "devDependencies": {
-    "@fiducia/test-config": "file:../fiducia-test-config"
   }
 }

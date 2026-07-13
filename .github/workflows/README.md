@@ -4,11 +4,14 @@ GitHub Actions definitions for the fiducia-e2e suite.
 
 - `ci.yml` — the `e2e` workflow. Its default push/PR job (`conformance-no-cluster`)
   runs `node --test` with **no cluster deployed**: because every suite skips
-  cleanly when no endpoint is configured, this job passes on a clean checkout and
-  proves the specs load, parse, and skip. A second, manual-only
-  (`workflow_dispatch`) job (`kind-cluster-e2e`) checks out the sibling
-  `fiducia-infra` kind tier, stands up the 3-cluster topology, and runs the full
-  conformance + chaos run against real endpoints.
+  cleanly when no endpoint is configured, this job is a parser/unit/skip sentinel,
+  not deployment assurance. A second, manual-only (`workflow_dispatch`) job
+  (`kind-cluster-e2e`) checks out `fiducia-infra`, stands up its real single kind
+  cluster, and runs smoke plus conformance against `127.0.0.1:8090`.
+
+Cross-cluster quorum and disruptive chaos require three independently routed
+cluster endpoints. The single-cluster kind job intentionally does not run or
+claim that layer.
 
 This folder exists because GitHub Actions requires workflow YAML to live under
 `.github/workflows/`.

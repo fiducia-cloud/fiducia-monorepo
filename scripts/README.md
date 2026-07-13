@@ -6,7 +6,8 @@ Standalone maintenance/CI scripts for the suite.
   It walks `src/`, `tests/`, and `scripts/`, and syntax-checks every `.mjs`
   with `node --check` (the same parser Node uses to run them). This deliberately
   avoids pulling ESLint so the repo stays dependency-light; it catches parse
-  errors and unresolved static imports before the specs run.
+  errors before the specs run. The test runner, not this syntax-only check,
+  resolves and loads imports.
 
 Scripts here are tooling around the tests, not part of the client or the specs
 themselves.

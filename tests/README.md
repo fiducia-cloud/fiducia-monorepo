@@ -10,6 +10,7 @@ cleanly** (not fails) when no endpoint is configured.
   semaphores, rw-locks, idempotency, rate-limit, cron, KV, elections, discovery).
 - `chaos/` — the multi-cluster quorum / cross-cluster linearizability layer.
 - `helpers.mjs` — shared, non-test helpers (no `.test.mjs` suffix so the runner
-  ignores it): unique-key generation, the `NO_ENDPOINT` skip reason, and
-  `skipIfUndeployed()`, which turns a 404/501 route into a skip while letting any
-  wrong behavioral assertion still fail.
+  ignores it): high-entropy run-namespaced key generation, the `NO_ENDPOINT`
+  skip reason, strict `/v1/status` assertions, and `skipIfUndeployed()`, which
+  turns a 404/501 route into a skip while letting any wrong behavioral assertion
+  still fail.
