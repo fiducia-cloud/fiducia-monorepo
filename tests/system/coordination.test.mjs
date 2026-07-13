@@ -213,7 +213,11 @@ describe("coordination system: 3-node cluster behind the load balancer", { skip:
         label: `kvPut ${key} during failover`,
       });
       assert.ok(committed(res));
-      assert.equal(shardOf(res), shardFor(key, stack.shardCount), "routing agreement holds during failover");
+      assert.equal(
+        shardOf(res),
+        shardForOrgKey(key, stack.shardCount),
+        "routing agreement holds during failover",
+      );
     }
   });
 
