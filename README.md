@@ -149,8 +149,8 @@ Requires Node ≥ 22 (CI and the conformance image use 22.17.0; see `.nvmrc`). N
 ## Reproducible CI and container inputs
 
 CI resolves `fiducia-test-config` at
-`4f8a4fa9c8115e1de69d58ec312cb3e17e05864f` and the manual kind tier resolves
-`fiducia-infra` at `d54f37fe56206f54c11d96668a000710bfe0d766`.
+`825220281fdc16bbf47a035177001d2fe29bdabf` and the manual kind tier resolves
+`fiducia-infra` at `1d5dc84eecc0f5e9c35bbe1f274035a70bfc6fa8`.
 All actions are commit-pinned and npm uses the lockfile with lifecycle scripts
 disabled. The container runs as the upstream `node` user, pins its Node base
 manifest by digest, and deliberately contains only the dependency-free default
