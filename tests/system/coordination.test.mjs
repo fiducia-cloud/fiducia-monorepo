@@ -135,8 +135,8 @@ describe("coordination system: 3-node cluster behind the load balancer", { skip:
       assert.ok(committed(res), `write must commit: ${JSON.stringify(res)}`);
       assert.equal(
         shardOf(res),
-        shardFor(key, stack.shardCount),
-        `LB+node committed ${key} on shard ${shardOf(res)}; fiducia-routing says ${shardFor(key, stack.shardCount)}`,
+        shardForOrgKey(key, stack.shardCount),
+        `LB+node committed ${key} on shard ${shardOf(res)}; fiducia-routing says ${shardForOrgKey(key, stack.shardCount)}`,
       );
       const read = await eventually(() => lb.kvGet(key), { timeoutMs: 10_000, label: `kvGet ${key}` });
       assert.equal(read?.entry?.value, `v-${i}`, "read-your-write through the LB");
