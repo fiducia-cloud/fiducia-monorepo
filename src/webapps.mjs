@@ -84,6 +84,7 @@ export async function startDisposablePostgres({ databases = {} } = {}) {
   return {
     port,
     url: (db) => `postgres://postgres@127.0.0.1:${port}/${db}`,
+    sql: (db, statement) => run("psql", [...psqlBase, "-d", db, "-v", "ON_ERROR_STOP=1", "-c", statement]),
     stop: async () => {
       await run("pg_ctl", ["-D", dataDir, "-m", "immediate", "stop"]).catch(() => {});
       await rm(dir, { recursive: true, force: true });
@@ -174,6 +175,13 @@ export async function bootWebAppStack() {
       },
     });
     stack.push(postgres);
+
+    // Admin entry is defense-in-depth: the Supabase app_metadata role AND an
+    // enabled row in the admin plane's operators registry.
+    await postgres.sql(
+      "fiducia_admin",
+      `insert into operators (supabase_user_id, email, role) values ('${OPERATOR.id}', '${OPERATOR.email}', 'admin')`,
+    );
 
     const auth = await startServer({
       command: "cargo",
