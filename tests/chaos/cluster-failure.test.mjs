@@ -13,9 +13,9 @@
 //   (b) a lock acquired via endpoint A is observable via endpoint B
 //       (cross-cluster linearizability — all lock state is one Raft group).
 //
-// DISRUPTIVE test (kill a cluster) is DOCUMENTED and gated behind
-// FIDUCIA_E2E_ALLOW_DISRUPTIVE=1, and even then only calls a no-op
-// `disruptCluster` stub — this repo never actually kills infrastructure.
+// DISRUPTIVE test (kill a cluster) is gated behind both
+// FIDUCIA_E2E_ALLOW_DISRUPTIVE=1 and an authenticated chaos-hook URL. The hook
+// owns provider-specific disruption/healing; this suite verifies the outcome.
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
@@ -48,17 +48,33 @@ function looksHealthy(status) {
   return true;
 }
 
-// No-op disruption hook. A real harness would (for LOCAL/kind) cordon+drain or
-// `kubectl delete` the target cluster's node pods, or (for cloud) fail its LB
-// health check so the edge steers away. Here it is intentionally inert so the
-// suite can never take down infrastructure.
-async function disruptCluster(name) {
-  void name;
-  return { disrupted: false, note: "no-op stub; real kill wired only in the infra harness" };
+async function chaosAction(action, cluster) {
+  const base = process.env.FIDUCIA_E2E_CHAOS_HOOK_URL?.trim();
+  const token = process.env.FIDUCIA_E2E_CHAOS_HOOK_TOKEN?.trim();
+  assert.ok(base, "FIDUCIA_E2E_CHAOS_HOOK_URL is required for disruptive tests");
+  assert.ok(token, "FIDUCIA_E2E_CHAOS_HOOK_TOKEN is required for disruptive tests");
+  const response = await fetch(base, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${token}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ action, cluster }),
+    signal: AbortSignal.timeout(60_000),
+  });
+  const body = await response.json().catch(() => ({}));
+  assert.ok(response.ok, `chaos hook ${action} failed: HTTP ${response.status}`);
+  assert.equal(body[action === "disrupt" ? "disrupted" : "healed"], true,
+    `chaos hook must confirm ${action}`);
+  return body;
 }
+
+async function disruptCluster(name) {
+  return chaosAction("disrupt", name);
+}
+
 async function healCluster(name) {
-  void name;
-  return { healed: true };
+  return chaosAction("heal", name);
 }
 
 describe("chaos / cross-cluster quorum", { skip: MULTI }, () => {
@@ -98,9 +114,8 @@ describe("chaos / cross-cluster quorum", { skip: MULTI }, () => {
     });
   });
 
-  // Disruptive kill-a-cluster test. Gated OFF by default; even when enabled it
-  // only drives the no-op disruptCluster stub, so nothing is actually killed
-  // here. This documents the intended flow for a real infra harness to fill in.
+  // Disruptive kill-a-cluster test. Gated OFF by default and requires an
+  // authenticated provider-specific hook that confirms disruption and healing.
   it("(c) surviving 2/3 after a cluster loss (disruptive; gated)", { skip: process.env.FIDUCIA_E2E_ALLOW_DISRUPTIVE !== "1" }, async (t) => {
     await skipIfUndeployed(t, "disruptive cluster-loss flow", async () => {
       const a = clientFor(eps[0]);
@@ -113,30 +128,31 @@ describe("chaos / cross-cluster quorum", { skip: MULTI }, () => {
       assert.equal(grant.acquired, true);
       const token = grant.fencing_token;
 
-      // 2. Kill one cluster (NO-OP here). A real harness kills eps[2]'s cluster.
-      const killed = await disruptCluster("hetzner");
-      // With the stub inert, we can only assert the intended invariants against
-      // the still-live endpoints; a real harness would first confirm eps[2] is
-      // unreachable, then assert the following against the remaining 2/3:
+      const cluster = process.env.FIDUCIA_E2E_CHAOS_CLUSTER?.trim() || "hetzner";
+      const killed = await disruptCluster(cluster);
+      try {
+        // 3. Confirm the selected cluster endpoint is actually unavailable.
+        await assert.rejects(clientFor(eps[2]).status(),
+          "the disrupted cluster endpoint must become unreachable");
 
-      // 3. The pre-existing lock is still observable on a survivor endpoint.
-      const view = await survivor.lockGet(key);
-      const lock = view?.lock ?? output(view);
-      if (lock && lock.holder !== undefined) {
-        assert.equal(lock.holder, holder, "lock must survive a single-cluster loss (2/3 quorum)");
+        // 4. The pre-existing lock is still observable on a survivor endpoint.
+        const view = await survivor.lockGet(key);
+        const lock = view?.lock ?? output(view);
+        if (lock && lock.holder !== undefined) {
+          assert.equal(lock.holder, holder, "lock must survive a single-cluster loss (2/3 quorum)");
+        }
+
+        // 5. A brand-new lock still commits on the surviving 2/3.
+        const key2 = uniqueKey("chaos-postkill");
+        const holder2 = uniqueId("holder2");
+        const grant2 = output(await survivor.tryLock(key2, { holder: holder2, ttlMs: 60_000 }));
+        assert.equal(grant2.acquired, true, "a new lock must still commit on the surviving 2/3");
+        await survivor.lockRelease(key2, { holder: holder2, fencingToken: grant2.fencing_token });
+      } finally {
+        await healCluster(cluster);
+        await survivor.lockRelease(key, { holder, fencingToken: token });
       }
-
-      // 4. A brand-new lock still commits on the surviving 2/3.
-      const key2 = uniqueKey("chaos-postkill");
-      const holder2 = uniqueId("holder2");
-      const grant2 = output(await survivor.tryLock(key2, { holder: holder2, ttlMs: 60_000 }));
-      assert.equal(grant2.acquired, true, "a new lock must still commit on the surviving 2/3");
-      await survivor.lockRelease(key2, { holder: holder2, fencingToken: grant2.fencing_token });
-
-      // 5. Heal and clean up.
-      await healCluster("hetzner");
-      await a.lockRelease(key, { holder, fencingToken: token });
-      t.diagnostic(`disruptCluster stub result: ${JSON.stringify(killed)}`);
+      t.diagnostic(`disruption confirmed: ${JSON.stringify(killed)}`);
     });
   });
 });
