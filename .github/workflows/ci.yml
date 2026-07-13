@@ -17,14 +17,27 @@ jobs:
   conformance-no-cluster:
     name: conformance (no cluster — must skip cleanly)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
-          node-version: "22"
+          path: fiducia-e2e
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          repository: fiducia-cloud/fiducia-test-config
+          ref: 825220281fdc16bbf47a035177001d2fe29bdabf
+          path: fiducia-test-config
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: "22.17.0"
+      - name: Install locked dependencies without lifecycle scripts
+        working-directory: fiducia-e2e
+        run: npm ci --ignore-scripts
       - name: Lint (ESM syntax check)
+        working-directory: fiducia-e2e
         run: node scripts/lint.mjs
       - name: Conformance + smoke (skips with no endpoint)
+        working-directory: fiducia-e2e
         run: node --test
 
   # ───────────────────────────────────────────────────────────────────────────
@@ -35,21 +48,34 @@ jobs:
   kind-cluster-e2e:
     name: conformance (single kind cluster)
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     if: ${{ github.event_name == 'workflow_dispatch' }}
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
-          node-version: "22"
+          path: fiducia-e2e
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          repository: fiducia-cloud/fiducia-test-config
+          ref: 825220281fdc16bbf47a035177001d2fe29bdabf
+          path: fiducia-test-config
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: "22.17.0"
       - name: Check out fiducia-infra (kind tier)
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           repository: fiducia-cloud/fiducia-infra
+          ref: 1d5dc84eecc0f5e9c35bbe1f274035a70bfc6fa8
           path: fiducia-infra
+      - name: Install locked dependencies without lifecycle scripts
+        working-directory: fiducia-e2e
+        run: npm ci --ignore-scripts
       - name: Bring up the kind conformance cluster
         run: |
           bash fiducia-infra/tools/kind-up.sh
           echo "FIDUCIA_E2E_BASE_URL=http://127.0.0.1:8090" >> "$GITHUB_ENV"
           echo "FIDUCIA_E2E_ALLOW_INSECURE_LOCALHOST=1" >> "$GITHUB_ENV"
       - name: Conformance
+        working-directory: fiducia-e2e
         run: node --test tests/smoke.test.mjs 'tests/conformance/**/*.test.mjs'

@@ -7,16 +7,24 @@ drives the **real HTTP contract** (`fiducia-clients/PROTOCOL.md`) against a
 running deployment and asserts that every coordination primitive behaves
 correctly, then adds a **multi-cluster quorum / chaos** layer on top.
 
-It follows the org test convention: Node's built-in runner (`node --test`),
-ESM `.mjs`, dependency-light (global `fetch` + `node:test` + `node:assert`), with
-[`@fiducia/test-config`](../fiducia-test-config) as the only devDependency.
+It follows the org test convention: Node's built-in runner (`node --test`) and
+ESM `.mjs`. The conformance, chaos, and smoke layers have no third-party runtime
+packages (global `fetch` + `node:test` + `node:assert`); the opt-in local web-app
+composition uses the sibling `@fiducia/test-config` development harness.
 
-## Two run modes (via env)
+## Run modes
 
 | Mode | How | When |
 |------|-----|------|
 | **(a) Local single-cluster conformance** | `FIDUCIA_E2E_BASE_URL=http://127.0.0.1:8090` with `FIDUCIA_E2E_ALLOW_INSECURE_LOCALHOST=1` after `fiducia-infra/tools/kind-up.sh` | smoke and primitive conformance only; this cannot prove cross-cluster failover |
 | **(b) Real cross-cluster deployment** | `FIDUCIA_E2E_ENDPOINTS` = three independently routed `lb_endpoint` URLs from [`fiducia-infra/topology.toml`](../fiducia-infra/topology.toml) | staging or production quorum and chaos validation |
+| **(c) Local web/auth composition** | `npm run test:webapps` | boots real auth/admin/backend sibling checkouts against ephemeral stub identity/coordination services and scratch Postgres; proves login and authorization-plane separation without cloud dependencies |
+
+The web/auth stack's `stop()` is concurrency-safe and retryable: completed
+cleanup steps are remembered and failed steps remain pending. Scratch Postgres
+cleanup reads and probes `postmaster.pid` even if `pg_ctl -w start` failed
+ambiguously; the data directory is never removed while that process is live or
+its state is indeterminate.
 
 ## Environment variables
 
@@ -36,6 +44,8 @@ ESM `.mjs`, dependency-light (global `fetch` + `node:test` + `node:assert`), wit
 | `FIDUCIA_E2E_CHAOS_NAMESPACE` | namespace containing node StatefulSets (default `fiducia`) |
 | `FIDUCIA_E2E_CHAOS_SELECTOR` | node StatefulSet/pod selector (default `app.kubernetes.io/name=fiducia-node`) |
 | `FIDUCIA_E2E_KUBECTL` | kubectl binary path (default `kubectl`) |
+| `FIDUCIA_E2E_WEBAPPS` | `1` enables the heavyweight web-app composition test (`npm run test:webapps` sets it automatically) |
+| `FIDUCIA_REPOS_ROOT` | optional parent directory containing sibling web/auth/interface checkouts for the web-app test (default: this repo's parent) |
 
 Endpoint resolution order (`src/endpoints.mjs`): `FIDUCIA_E2E_ENDPOINTS` →
 `FIDUCIA_E2E_BASE_URL` → **none** (every suite skips).
@@ -72,10 +82,13 @@ tests/
     discovery.test.mjs      register→resolve; metadata filter narrows; deregister drops
   chaos/
     cluster-failure.test.mjs multi-cluster quorum + cross-cluster linearizability
+  webapps/
+    login-separation.test.mjs real auth/admin/backend + isolated local fixtures
   helpers.mjs               shared skip/uniqueKey helpers (not a test file)
 src/
   client.mjs                fetch-based client mirroring PROTOCOL.md routes
   endpoints.mjs             env → endpoint list; endpoints() / primary()
+  webapps.mjs               disposable web/auth composition + cleanup helpers
 ```
 
 Each conformance file frames the invariant with the real-world use case it
@@ -110,12 +123,15 @@ used only for smoke and conformance in CI.
 ## Run
 
 ```sh
-npm install                 # @fiducia/test-config is a sibling file: dep
 npm test                    # everything (skips cleanly with no endpoint)
 npm run test:conformance    # just tests/conformance/
 npm run test:chaos          # just tests/chaos/
 npm run test:smoke          # just the reachability smoke
+npm run test:webapps        # real auth/admin/backend + local stubs/scratch PG
 npm run lint                # ESM syntax check (dependency-light, no ESLint)
+
+# Keep the same isolated web/auth stack running for interactive local use:
+node scripts/dev-stack.mjs
 
 # Local kind conformance (one cluster; no cross-cluster assurance):
 bash ../fiducia-infra/tools/kind-up.sh
@@ -127,24 +143,42 @@ FIDUCIA_E2E_ENDPOINTS="https://gcp.lb.fiducia.cloud,https://aws.lb.fiducia.cloud
 FIDUCIA_E2E_API_KEY="$KEY" npm test
 ```
 
-Requires Node ≥ 22 (see `.nvmrc`). No `tsconfig` — the org runs plain ESM `.mjs`.
+Requires Node ≥ 22 (CI and the conformance image use 22.17.0; see `.nvmrc`). No
+`tsconfig` — the org runs plain ESM `.mjs`.
+
+## Reproducible CI and container inputs
+
+CI resolves `fiducia-test-config` at
+`825220281fdc16bbf47a035177001d2fe29bdabf` and the manual kind tier resolves
+`fiducia-infra` at `1d5dc84eecc0f5e9c35bbe1f274035a70bfc6fa8`.
+All actions are commit-pinned and npm uses the lockfile with lifecycle scripts
+disabled. The container runs as the upstream `node` user, pins its Node base
+manifest by digest, and deliberately contains only the dependency-free default
+conformance suite. Docker Dependabot tracks reviewed digest updates. The opt-in
+web-app composition remains a source-checkout test because it needs sibling
+services, schemas, and disposable PostgreSQL.
 
 ## Security posture
 
-No credentials are baked into the suite. Every secret is read from the
-environment at run time — `FIDUCIA_E2E_API_KEY` (sent only to HTTPS endpoints,
+No live credentials are baked into the suite. Deployment-facing secrets are
+read from the environment at run time — `FIDUCIA_E2E_API_KEY` (sent only to HTTPS endpoints,
 apart from an explicitly enabled loopback harness, and never followed across a redirect),
 `FIDUCIA_E2E_CHAOS_HOOK_TOKEN`, and the chaos context/selector vars — and the
 fixtures use only ephemeral, run-namespaced keys (`uniqueKey()` helpers backed by
-an explicit run ID or random UUID), never real tenant data. There are no `.env` files or hardcoded tokens in `tests/` or
-`src/`. Disruptive chaos that mutates live Kubernetes workloads stays gated
+an explicit run ID or random UUID), never real tenant data. The opt-in web-app
+composition intentionally uses deterministic test-only users/passwords and
+internal secrets, but they are confined to loopback stub services and a
+throwaway Postgres cluster and are never sent to a deployment. There are no
+`.env` files or hardcoded production tokens in `tests/` or `src/`. Disruptive
+chaos that mutates live Kubernetes workloads stays gated
 behind `FIDUCIA_E2E_ALLOW_DISRUPTIVE=1` plus an explicit hook/context mapping.
-The suite has no third-party dependencies (only `@fiducia/test-config`), so there
-is no dependency attack surface to audit.
+The deployment-facing suites have no third-party runtime packages. CI installs
+the local, commit-pinned `@fiducia/test-config` development harness from the
+lockfile for the opt-in composition contract, with package lifecycle scripts
+disabled.
 
 ## Related
 
 - [`fiducia-clients`](../fiducia-clients) — `PROTOCOL.md` is the endpoint/method source of truth this suite mirrors.
 - [`fiducia-node.rs`](../fiducia-node.rs) — the coordination engine and `/v1` route semantics.
 - [`fiducia-infra`](../fiducia-infra) — multi-cluster topology; the single-cluster kind tier is the local conformance target.
-- [`fiducia-test-config`](../fiducia-test-config) — shared `node --test` harness + presets.
