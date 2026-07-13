@@ -78,20 +78,20 @@ export async function startDisposablePostgres({ databases = {} } = {}) {
     "-o", `-p ${port} -c listen_addresses=127.0.0.1 -c unix_socket_directories=''`,
     "-l", join(dir, "pg.log"),
     "-w", "start",
-  ]);
+  ], pgEnv);
   const psqlBase = ["-h", "127.0.0.1", "-p", String(port), "-U", "postgres"];
   for (const [name, schemaSql] of Object.entries(databases)) {
-    await run("createdb", [...psqlBase, name]);
+    await run("createdb", [...psqlBase, name], pgEnv);
     if (schemaSql) {
-      await run("psql", [...psqlBase, "-d", name, "-v", "ON_ERROR_STOP=1", "-f", schemaSql]);
+      await run("psql", [...psqlBase, "-d", name, "-v", "ON_ERROR_STOP=1", "-f", schemaSql], pgEnv);
     }
   }
   return {
     port,
     url: (db) => `postgres://postgres@127.0.0.1:${port}/${db}`,
-    sql: (db, statement) => run("psql", [...psqlBase, "-d", db, "-v", "ON_ERROR_STOP=1", "-c", statement]),
+    sql: (db, statement) => run("psql", [...psqlBase, "-d", db, "-v", "ON_ERROR_STOP=1", "-c", statement], pgEnv),
     stop: async () => {
-      await run("pg_ctl", ["-D", dataDir, "-m", "immediate", "stop"]).catch(() => {});
+      await run("pg_ctl", ["-D", dataDir, "-m", "immediate", "stop"], pgEnv).catch(() => {});
       await rm(dir, { recursive: true, force: true });
     },
   };
@@ -195,8 +195,10 @@ export async function bootWebAppStack() {
       env: {
         ...fiduciaAuthStubEnv(supabase, kv),
         FIDUCIA_INTROSPECT_SECRET: "e2e-introspect-secret",
-        // Required at boot since efeaebe: fiducia-auth signs its KV requests.
+        // Required at boot since efeaebe: fiducia-auth signs its KV requests
+        // and HMACs key-mutation idempotency records.
         FIDUCIA_INTERNAL_SECRET: "e2e-internal-secret",
+        FIDUCIA_KEY_IDEMPOTENCY_SECRET: "e2e-key-idempotency-secret",
       },
       readyPath: "/healthz",
       reuseUrlEnv: "FIDUCIA_AUTH_TEST_URL",
