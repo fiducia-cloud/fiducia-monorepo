@@ -43,6 +43,13 @@ function fnv1a(key) {
 const shardFor = (key, count) => fnv1a(key) % count;
 const LOCK_COORDINATION_KEY = "\u0000fiducia-lock-coordinator";
 
+// The org this suite acts as (via trusted-edge identity headers). The node
+// commits org-owned keys under their SCOPED form (`\\u0001{org}\\u0001{key}` --
+// fiducia_routing::org_scoped_key), so shard predictions must hash that.
+const ORG = "e2e-system";
+const orgScopedKey = (key) => `\u0001${ORG}\u0001${key}`;
+const shardForOrgKey = (key, count) => shardFor(orgScopedKey(key), count);
+
 // --- small helpers -----------------------------------------------------------
 
 /** Retry `fn` until it stops throwing or the deadline passes. */
