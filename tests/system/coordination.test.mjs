@@ -177,7 +177,7 @@ describe("coordination system: 3-node cluster behind the load balancer", { skip:
     for (let i = 0; perShard.some((n) => n < target); i++) {
       assert.ok(i < 10_000, "key generation runaway");
       const key = uniqueKey(`system-compaction-${i}`);
-      const shard = shardFor(key, stack.shardCount);
+      const shard = shardForOrgKey(key, stack.shardCount);
       if (perShard[shard] >= target) continue;
       const res = await eventually(() => lb.kvPut(key, "fill"), { timeoutMs: 20_000, label: `kvPut ${key}` });
       assert.ok(committed(res));
