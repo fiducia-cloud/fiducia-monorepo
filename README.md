@@ -8,8 +8,8 @@ running deployment and asserts that every coordination primitive behaves
 correctly, then adds a **multi-cluster quorum / chaos** layer on top.
 
 It follows the org test convention: Node's built-in runner (`node --test`),
-ESM `.mjs`, dependency-light (global `fetch` + `node:test` + `node:assert`), with
-[`@fiducia/test-config`](../fiducia-test-config) as the only devDependency.
+ESM `.mjs`, and no third-party packages (global `fetch` + `node:test` +
+`node:assert`).
 
 ## Run modes
 
@@ -122,7 +122,6 @@ used only for smoke and conformance in CI.
 ## Run
 
 ```sh
-npm install                 # @fiducia/test-config is a sibling file: dep
 npm test                    # everything (skips cleanly with no endpoint)
 npm run test:conformance    # just tests/conformance/
 npm run test:chaos          # just tests/chaos/
@@ -159,12 +158,11 @@ throwaway Postgres cluster and are never sent to a deployment. There are no
 `.env` files or hardcoded production tokens in `tests/` or `src/`. Disruptive
 chaos that mutates live Kubernetes workloads stays gated
 behind `FIDUCIA_E2E_ALLOW_DISRUPTIVE=1` plus an explicit hook/context mapping.
-The suite has no third-party dependencies (only `@fiducia/test-config`), so there
-is no dependency attack surface to audit.
+The suite has no third-party packages, so its CI does not run an install step or
+execute package lifecycle scripts.
 
 ## Related
 
 - [`fiducia-clients`](../fiducia-clients) — `PROTOCOL.md` is the endpoint/method source of truth this suite mirrors.
 - [`fiducia-node.rs`](../fiducia-node.rs) — the coordination engine and `/v1` route semantics.
 - [`fiducia-infra`](../fiducia-infra) — multi-cluster topology; the single-cluster kind tier is the local conformance target.
-- [`fiducia-test-config`](../fiducia-test-config) — shared `node --test` harness + presets.
