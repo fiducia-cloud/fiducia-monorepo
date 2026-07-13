@@ -20,7 +20,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-import { endpoints, makeClient, primary } from "../../src/endpoints.mjs";
+import { endpoints, makeClient } from "../../src/endpoints.mjs";
 import { NO_ENDPOINT, uniqueKey, uniqueId, skipIfUndeployed } from "../helpers.mjs";
 
 // ---------------------------------------------------------------------------
@@ -231,7 +231,3 @@ describe("deployed cluster routes keys like the frozen hash", { skip: NO_ENDPOIN
     });
   });
 });
-
-// Keep `primary` imported even when NO_ENDPOINT short-circuits the suite —
-// mirrors the import style of the sibling conformance specs.
-void primary;

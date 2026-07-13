@@ -8,6 +8,7 @@
     "test": "node --test",
     "test:conformance": "node --test 'tests/conformance/**/*.test.mjs'",
     "test:chaos": "node --test 'tests/chaos/**/*.test.mjs'",
+    "test:system": "FIDUCIA_E2E_SYSTEM=1 node --test 'tests/system/**/*.test.mjs'",
     "test:webapps": "FIDUCIA_E2E_WEBAPPS=1 node --test 'tests/webapps/**/*.test.mjs'",
     "test:smoke": "node --test tests/smoke.test.mjs",
     "lint": "node scripts/lint.mjs"
