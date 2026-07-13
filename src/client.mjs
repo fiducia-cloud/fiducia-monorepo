@@ -45,7 +45,13 @@ export class FiduciaClient {
    * @param {{ apiKey?: string, fetch?: typeof fetch }} [opts]
    */
   constructor(baseUrl, opts = {}) {
-    this.base = String(baseUrl).replace(/\/+$/, "");
+    const parsed = new URL(String(baseUrl));
+    const local = ["localhost", "127.0.0.1", "::1"].includes(parsed.hostname);
+    const allowLocalHttp = local && process.env.FIDUCIA_E2E_ALLOW_INSECURE_LOCALHOST === "1";
+    if (opts.apiKey && parsed.protocol !== "https:" && !allowLocalHttp) {
+      throw new Error("refusing to send FIDUCIA_E2E_API_KEY over a non-HTTPS endpoint");
+    }
+    this.base = parsed.origin;
     this.apiKey = opts.apiKey;
     this.fetchImpl = opts.fetch ?? globalThis.fetch;
   }
@@ -58,6 +64,8 @@ export class FiduciaClient {
       method,
       headers: Object.keys(headers).length ? headers : undefined,
       body: body !== undefined ? JSON.stringify(body) : undefined,
+      redirect: "manual",
+      signal: AbortSignal.timeout(Number(process.env.FIDUCIA_E2E_TIMEOUT_MS || 15_000)),
     });
     const text = await res.text();
     let data = null;
