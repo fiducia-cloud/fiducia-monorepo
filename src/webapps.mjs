@@ -84,6 +84,7 @@ export async function startDisposablePostgres({ databases = {} } = {}) {
   return {
     port,
     url: (db) => `postgres://postgres@127.0.0.1:${port}/${db}`,
+    sql: (db, statement) => run("psql", [...psqlBase, "-d", db, "-v", "ON_ERROR_STOP=1", "-c", statement]),
     stop: async () => {
       await run("pg_ctl", ["-D", dataDir, "-m", "immediate", "stop"]).catch(() => {});
       await rm(dir, { recursive: true, force: true });
