@@ -131,6 +131,7 @@ npm run test:conformance    # just tests/conformance/
 npm run test:chaos          # just tests/chaos/
 npm run test:smoke          # just the reachability smoke
 npm run test:webapps        # real auth/admin/backend + local stubs/scratch PG
+npm run test:system         # real 3-node fiducia-node cluster + fiducia-load-balance
 npm run lint                # ESM syntax check (dependency-light, no ESLint)
 
 # Keep the same isolated web/auth stack running for interactive local use:
