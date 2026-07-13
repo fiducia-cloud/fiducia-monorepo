@@ -198,7 +198,8 @@ export async function bootWebAppStack() {
         // Required at boot since efeaebe: fiducia-auth signs its KV requests
         // and HMACs key-mutation idempotency records.
         FIDUCIA_INTERNAL_SECRET: "e2e-internal-secret",
-        FIDUCIA_KEY_IDEMPOTENCY_SECRET: "e2e-key-idempotency-secret",
+        // ≥32 bytes or fiducia-auth refuses to boot (WeakIdempotencySecret).
+        FIDUCIA_KEY_IDEMPOTENCY_SECRET: "e2e-key-idempotency-secret-0123456789abcdef",
       },
       readyPath: "/healthz",
       reuseUrlEnv: "FIDUCIA_AUTH_TEST_URL",
