@@ -243,7 +243,9 @@ export async function bootCoordinationStack({ shardCount = 4, compactThreshold =
       command: lbBin,
       env: {
         PORT: String(lbPort),
-        FIDUCIA_NODES: clientPorts.map((p) => `127.0.0.1:${p}`).join(","),
+        // Full URLs: the LB forwards to these verbatim (its `upstream_url`
+        // requires a scheme; a bare host:port is treated as unreachable).
+        FIDUCIA_NODES: clientPorts.map((p) => `http://127.0.0.1:${p}`).join(","),
         FIDUCIA_SHARD_COUNT: String(shardCount),
         FIDUCIA_BRAIN_URL: brain.url,
         FIDUCIA_INTERNAL_SECRET: INTERNAL_SECRET,
