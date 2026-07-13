@@ -118,6 +118,18 @@ FIDUCIA_E2E_API_KEY="$KEY" npm test
 
 Requires Node ≥ 22 (see `.nvmrc`). No `tsconfig` — the org runs plain ESM `.mjs`.
 
+## Security posture
+
+No credentials are baked into the suite. Every secret is read from the
+environment at run time — `FIDUCIA_E2E_API_KEY` (sent as `Authorization: Bearer`),
+`FIDUCIA_E2E_CHAOS_HOOK_TOKEN`, and the chaos context/selector vars — and the
+fixtures use only ephemeral, per-test random keys (`uniqueKey()` helpers), never
+real tenant data. There are no `.env` files or hardcoded tokens in `tests/` or
+`src/`. Disruptive chaos that mutates live Kubernetes workloads stays gated
+behind `FIDUCIA_E2E_ALLOW_DISRUPTIVE=1` plus an explicit hook/context mapping.
+The suite has no third-party dependencies (only `@fiducia/test-config`), so there
+is no dependency attack surface to audit.
+
 ## Related
 
 - [`fiducia-clients`](../fiducia-clients) — `PROTOCOL.md` is the endpoint/method source of truth this suite mirrors.
