@@ -176,6 +176,13 @@ export async function bootWebAppStack() {
     });
     stack.push(postgres);
 
+    // Admin entry is defense-in-depth: the Supabase app_metadata role AND an
+    // enabled row in the admin plane's operators registry.
+    await postgres.sql(
+      "fiducia_admin",
+      `insert into operators (supabase_user_id, email, role) values ('${OPERATOR.id}', '${OPERATOR.email}', 'admin')`,
+    );
+
     const auth = await startServer({
       command: "cargo",
       args: ["run", "--quiet"],
