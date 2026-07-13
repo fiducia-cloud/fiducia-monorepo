@@ -170,8 +170,9 @@ async function startProcess({ name, command, args = [], env = {}, url, readyPath
  *
  * @param {{ shardCount?: number, compactThreshold?: number }} [options]
  *   `shardCount` defaults to 4 (few enough that a modest write volume crosses
- *   the per-shard compaction threshold); `compactThreshold` to 16 so the suite
- *   exercises snapshot + truncation and InstallSnapshot catch-up for real.
+ *   the per-shard compaction threshold); `compactThreshold` to 16 (the node's
+ *   `FIDUCIA_RAFT_SNAPSHOT_THRESHOLD`) so the suite exercises snapshot +
+ *   truncation and InstallSnapshot catch-up for real.
  */
 export async function bootCoordinationStack({ shardCount = 4, compactThreshold = 16 } = {}) {
   const nodeRepo = repoPath(NODE_REPO);
@@ -215,7 +216,7 @@ export async function bootCoordinationStack({ shardCount = 4, compactThreshold =
         .join(","),
       FIDUCIA_SHARD_COUNT: String(shardCount),
       FIDUCIA_DATA_DIR: join(scratch, `node-${names[i]}`),
-      FIDUCIA_RAFT_COMPACT_THRESHOLD: String(compactThreshold),
+      FIDUCIA_RAFT_SNAPSHOT_THRESHOLD: String(compactThreshold),
       FIDUCIA_INTERNAL_SECRET: INTERNAL_SECRET,
     });
     const spawnNode = (i) =>

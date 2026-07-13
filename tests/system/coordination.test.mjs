@@ -197,12 +197,12 @@ describe("coordination system: 3-node cluster behind the load balancer", { skip:
         const status = await nodeStatus(url);
         for (const shard of status.consensus.shards) {
           assert.ok(
-            shard.snapshot_base_index > 0,
-            `${status.consensus.node_id} shard ${shard.shard_id} never compacted (base=${shard.snapshot_base_index}, log=${shard.last_log_index})`,
+            shard.snapshot_index > 0,
+            `${status.consensus.node_id} shard ${shard.shard_id} never compacted (snapshot_index=${shard.snapshot_index}, log=${shard.last_log_index})`,
           );
           assert.ok(
-            shard.last_log_index - shard.snapshot_base_index <= stack.compactThreshold * 2,
-            `live log stays bounded (shard ${shard.shard_id}: ${shard.last_log_index - shard.snapshot_base_index} entries)`,
+            shard.retained_log_entries <= stack.compactThreshold * 2,
+            `live log stays bounded (shard ${shard.shard_id}: ${shard.retained_log_entries} retained entries)`,
           );
         }
       }
@@ -258,8 +258,8 @@ describe("coordination system: 3-node cluster behind the load balancer", { skip:
           `shard ${shard.shard_id}: rejoined member applied ${shard.last_applied} < frontier ${needed}`,
         );
         assert.ok(
-          shard.snapshot_base_index > 0,
-          `shard ${shard.shard_id}: rejoined member should hold compacted state (snapshot base > 0)`,
+          shard.snapshot_index > 0,
+          `shard ${shard.shard_id}: rejoined member should hold compacted state (snapshot_index > 0)`,
         );
       }
     }, { timeoutMs: 120_000, label: "rejoined member catches up to the commit frontier" });
