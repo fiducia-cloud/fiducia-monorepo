@@ -17,6 +17,7 @@ jobs:
   conformance-no-cluster:
     name: conformance (no cluster — must skip cleanly)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
@@ -24,14 +25,14 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           repository: fiducia-cloud/fiducia-test-config
-          ref: ed4c788abf3964482ae72a08b82fa3ac1d193f81
+          ref: 4f8a4fa9c8115e1de69d58ec312cb3e17e05864f
           path: fiducia-test-config
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
-          node-version: "22"
-      - name: Install locked dependencies
+          node-version: "22.17.0"
+      - name: Install locked dependencies without lifecycle scripts
         working-directory: fiducia-e2e
-        run: npm ci
+        run: npm ci --ignore-scripts
       - name: Lint (ESM syntax check)
         working-directory: fiducia-e2e
         run: node scripts/lint.mjs
@@ -47,6 +48,7 @@ jobs:
   kind-cluster-e2e:
     name: conformance (single kind cluster)
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     if: ${{ github.event_name == 'workflow_dispatch' }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -55,20 +57,20 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           repository: fiducia-cloud/fiducia-test-config
-          ref: ed4c788abf3964482ae72a08b82fa3ac1d193f81
+          ref: 4f8a4fa9c8115e1de69d58ec312cb3e17e05864f
           path: fiducia-test-config
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
-          node-version: "22"
+          node-version: "22.17.0"
       - name: Check out fiducia-infra (kind tier)
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           repository: fiducia-cloud/fiducia-infra
-          ref: 5fa4553cf05fdaac207b586a7b33849c696ae429
+          ref: d54f37fe56206f54c11d96668a000710bfe0d766
           path: fiducia-infra
-      - name: Install locked dependencies
+      - name: Install locked dependencies without lifecycle scripts
         working-directory: fiducia-e2e
-        run: npm ci
+        run: npm ci --ignore-scripts
       - name: Bring up the kind conformance cluster
         run: |
           bash fiducia-infra/tools/kind-up.sh

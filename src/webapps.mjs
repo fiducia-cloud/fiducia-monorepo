@@ -17,13 +17,6 @@ import { tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { startServer } from "@fiducia/test-config/harness";
-import {
-  fiduciaAuthStubEnv,
-  startStubFiduciaKv,
-  startStubSupabase,
-} from "@fiducia/test-config/stubs";
-
 const E2E_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 /** Sibling checkout of another fiducia repo (override root via FIDUCIA_REPOS_ROOT). */
@@ -42,6 +35,9 @@ function commandOnPath(name) {
 export function webAppsSkipReason() {
   if (process.env.FIDUCIA_E2E_WEBAPPS !== "1") {
     return "set FIDUCIA_E2E_WEBAPPS=1 to run the web-app login suite (boots 3 cargo servers + scratch Postgres)";
+  }
+  if (!existsSync(join(E2E_ROOT, "node_modules", "@fiducia", "test-config", "package.json"))) {
+    return "@fiducia/test-config is not installed (run npm ci from fiducia-e2e)";
   }
   for (const repo of ["fiducia-auth.rs", "fiducia-backend.rs", "fiducia-admin.rs", "fiducia-interfaces"]) {
     if (!existsSync(repoPath(repo))) {
@@ -299,6 +295,13 @@ export function makeRetryableReverseStop(stack) {
  * same way each app's login does.
  */
 export async function bootWebAppStack() {
+  // Keep the core conformance image dependency-free. The local harness is
+  // loaded only after the opt-in suite has verified all of its prerequisites.
+  const [{ startServer }, { fiduciaAuthStubEnv, startStubFiduciaKv, startStubSupabase }] =
+    await Promise.all([
+      import("@fiducia/test-config/harness"),
+      import("@fiducia/test-config/stubs"),
+    ]);
   const stack = [];
   const stop = makeRetryableReverseStop(stack);
 
@@ -344,6 +347,8 @@ export async function bootWebAppStack() {
         FIDUCIA_INTERNAL_SECRET: "e2e-internal-secret",
         // ≥32 bytes or fiducia-auth refuses to boot (WeakIdempotencySecret).
         FIDUCIA_KEY_IDEMPOTENCY_SECRET: "e2e-key-idempotency-secret-0123456789abcdef",
+        CUSTOMER_API_KEY_PEPPER: "e2e-api-key-pepper-0123456789abcdef",
+        CUSTOMER_API_KEY_HASH_ALGORITHM: "hmac-sha256",
       },
       readyPath: "/healthz",
       startupTimeoutMs: 300000,
@@ -379,7 +384,7 @@ export async function bootWebAppStack() {
         FIDUCIA_AUTH_URL: auth.url,
         FIDUCIA_SITE_MODE: "customer",
         SUPABASE_URL: supabase.url,
-        SUPABASE_ANON_KEY: "stub-anon-key",
+        SUPABASE_PUBLISHABLE_KEY: "stub-publishable-key",
         ...(existsSync(customerDist) ? { CUSTOMER_STATIC_DIR: customerDist } : {}),
         ...(existsSync(marketingDist) ? { STATIC_DIR: marketingDist } : {}),
       },
@@ -391,7 +396,7 @@ export async function bootWebAppStack() {
     const grant = async (user) => {
       const response = await fetch(`${supabase.url}/auth/v1/token?grant_type=password`, {
         method: "POST",
-        headers: { "content-type": "application/json", apikey: "stub-anon-key" },
+        headers: { "content-type": "application/json", apikey: "stub-publishable-key" },
         body: JSON.stringify({ email: user.email, password: user.password }),
       });
       if (!response.ok) {

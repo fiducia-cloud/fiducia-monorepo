@@ -7,9 +7,10 @@ drives the **real HTTP contract** (`fiducia-clients/PROTOCOL.md`) against a
 running deployment and asserts that every coordination primitive behaves
 correctly, then adds a **multi-cluster quorum / chaos** layer on top.
 
-It follows the org test convention: Node's built-in runner (`node --test`),
-ESM `.mjs`, and no third-party packages (global `fetch` + `node:test` +
-`node:assert`).
+It follows the org test convention: Node's built-in runner (`node --test`) and
+ESM `.mjs`. The conformance, chaos, and smoke layers have no third-party runtime
+packages (global `fetch` + `node:test` + `node:assert`); the opt-in local web-app
+composition uses the sibling `@fiducia/test-config` development harness.
 
 ## Run modes
 
@@ -142,7 +143,20 @@ FIDUCIA_E2E_ENDPOINTS="https://gcp.lb.fiducia.cloud,https://aws.lb.fiducia.cloud
 FIDUCIA_E2E_API_KEY="$KEY" npm test
 ```
 
-Requires Node ≥ 22 (see `.nvmrc`). No `tsconfig` — the org runs plain ESM `.mjs`.
+Requires Node ≥ 22 (CI and the conformance image use 22.17.0; see `.nvmrc`). No
+`tsconfig` — the org runs plain ESM `.mjs`.
+
+## Reproducible CI and container inputs
+
+CI resolves `fiducia-test-config` at
+`4f8a4fa9c8115e1de69d58ec312cb3e17e05864f` and the manual kind tier resolves
+`fiducia-infra` at `d54f37fe56206f54c11d96668a000710bfe0d766`.
+All actions are commit-pinned and npm uses the lockfile with lifecycle scripts
+disabled. The container runs as the upstream `node` user, pins its Node base
+manifest by digest, and deliberately contains only the dependency-free default
+conformance suite. Docker Dependabot tracks reviewed digest updates. The opt-in
+web-app composition remains a source-checkout test because it needs sibling
+services, schemas, and disposable PostgreSQL.
 
 ## Security posture
 
@@ -158,8 +172,10 @@ throwaway Postgres cluster and are never sent to a deployment. There are no
 `.env` files or hardcoded production tokens in `tests/` or `src/`. Disruptive
 chaos that mutates live Kubernetes workloads stays gated
 behind `FIDUCIA_E2E_ALLOW_DISRUPTIVE=1` plus an explicit hook/context mapping.
-The suite has no third-party packages, so its CI does not run an install step or
-execute package lifecycle scripts.
+The deployment-facing suites have no third-party runtime packages. CI installs
+the local, commit-pinned `@fiducia/test-config` development harness from the
+lockfile for the opt-in composition contract, with package lifecycle scripts
+disabled.
 
 ## Related
 

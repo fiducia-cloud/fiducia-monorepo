@@ -15,6 +15,11 @@ suite **boots the real tier locally** from sibling checkouts:
 | `fiducia-brain` | stub (empty nodes/placement, `ok` scale) |
 | Postgres (admin + customer schemas from `fiducia-interfaces/sql/`) | disposable scratch instance (Homebrew `initdb`/`pg_ctl`) |
 
+The real auth and backend processes receive only the fixture's public
+`stub-publishable-key`; the API-key authority receives an explicit test-only
+HMAC-SHA256 pepper. No deprecated Supabase anon-key alias or production secret
+is used.
+
 What it asserts:
 
 - operator (Supabase `app_metadata.roles` ⊇ `admin`) password login → hardened
@@ -34,9 +39,13 @@ FIDUCIA_E2E_WEBAPPS=1 npm run test:webapps
 # or: npm run test:webapps
 ```
 
-Skips cleanly when `FIDUCIA_E2E_WEBAPPS` is unset, sibling checkouts are missing,
-or the required PostgreSQL tools (`initdb`, `pg_ctl`, `createdb`, `psql`) are not
-on `PATH`; `FIDUCIA_REPOS_ROOT` overrides the default `..`. The three real
+Run `npm ci --ignore-scripts` first so the exact sibling
+`@fiducia/test-config` harness from the lockfile is linked locally.
+
+Skips cleanly when `FIDUCIA_E2E_WEBAPPS` is unset, the local harness or sibling
+checkouts are missing, or the required PostgreSQL tools (`initdb`, `pg_ctl`,
+`createdb`, `psql`) are not on `PATH`; `FIDUCIA_REPOS_ROOT` overrides the
+default `..`. The three real
 servers are always spawned as one composition so they all point at the same
 ephemeral Supabase/KV/Postgres fixtures; independently reusing an existing
 server would invalidate that isolation guarantee. Teardown probes the scratch

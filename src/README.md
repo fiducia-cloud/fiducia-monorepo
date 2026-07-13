@@ -25,8 +25,10 @@ themselves — the shared client and endpoint plumbing every suite imports.
   successfully stopped resources are removed and failed entries remain for a
   later retry. Scratch Postgres probes the authoritative `postmaster.pid` even
   after an ambiguous startup result and never deletes its data directory while
-  the postmaster is live or indeterminate. `webAppsSkipReason()` checks the sibling
-  checkouts and PostgreSQL tools before the heavyweight cargo builds.
+  the postmaster is live or indeterminate. `webAppsSkipReason()` checks the local
+  test harness, sibling checkouts, and PostgreSQL tools before the heavyweight
+  cargo builds. The test-config modules are dynamically imported only after
+  those checks, so the default conformance image retains no runtime dependency.
 
 Keeping the wire contract in one place means a PROTOCOL.md change is a one-file
 edit here rather than a change across every spec.
