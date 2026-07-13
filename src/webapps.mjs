@@ -70,7 +70,9 @@ export async function startDisposablePostgres({ databases = {} } = {}) {
   const port = 21000 + Math.floor(Math.random() * 1000);
   await run("pg_ctl", [
     "-D", dataDir,
-    "-o", `-p ${port} -c listen_addresses=127.0.0.1 -c unix_socket_directories=${dir}`,
+    // TCP-only: macOS caps unix-socket paths at 103 bytes, and deep tmpdirs
+    // (CI, sandboxes) blow past it. All clients connect via -h 127.0.0.1.
+    "-o", `-p ${port} -c listen_addresses=127.0.0.1 -c unix_socket_directories=''`,
     "-l", join(dir, "pg.log"),
     "-w", "start",
   ]);
