@@ -66,7 +66,10 @@ function run(command, args, opts = {}) {
 export async function startDisposablePostgres({ databases = {} } = {}) {
   const dir = await mkdtemp(join(tmpdir(), "fiducia-e2e-pg-"));
   const dataDir = join(dir, "data");
-  await run("initdb", ["-D", dataDir, "-A", "trust", "-U", "postgres"]);
+  // Without a valid locale macOS postmaster aborts with "became multithreaded
+  // during startup"; pin C so the scratch instance boots in any environment.
+  const pgEnv = { env: { ...process.env, LC_ALL: "C", LANG: "C" } };
+  await run("initdb", ["-D", dataDir, "-A", "trust", "-U", "postgres"], pgEnv);
   const port = 21000 + Math.floor(Math.random() * 1000);
   await run("pg_ctl", [
     "-D", dataDir,
