@@ -39,7 +39,7 @@ export function webAppsSkipReason() {
   if (!existsSync(join(E2E_ROOT, "node_modules", "@fiducia", "test-config", "package.json"))) {
     return "@fiducia/test-config is not installed (run npm ci from fiducia-e2e)";
   }
-  for (const repo of ["fiducia-auth.rs", "fiducia-backend.rs", "fiducia-admin.rs", "fiducia-interfaces"]) {
+  for (const repo of ["fiducia-auth.rs", "fiducia-customer.rs", "fiducia-admin.rs", "fiducia-interfaces"]) {
     if (!existsSync(repoPath(repo))) {
       return `sibling checkout ${repo} not found (set FIDUCIA_REPOS_ROOT)`;
     }
@@ -374,11 +374,11 @@ export async function bootWebAppStack() {
     stack.push(admin);
 
     const customerDist = join(repoPath("fiducia-customer-ui.web"), "dist");
-    const marketingDist = join(repoPath("fiducia-ui.web"), "dist");
+    const marketingDist = join(repoPath("fiducia-marketing.web"), "dist");
     const backend = await startServer({
       command: "cargo",
       args: ["run", "--quiet"],
-      cwd: repoPath("fiducia-backend.rs"),
+      cwd: repoPath("fiducia-customer.rs"),
       env: {
         DATABASE_URL: postgres.url("fiducia_customer"),
         FIDUCIA_AUTH_URL: auth.url,
