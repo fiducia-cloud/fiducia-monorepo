@@ -10,23 +10,32 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   conformance-no-cluster:
     name: conformance (no cluster — must skip cleanly)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+        with:
+          path: fiducia-e2e
+      - uses: actions/checkout@v7
+        with:
+          repository: fiducia-cloud/fiducia-test-config
+          path: fiducia-test-config
+      - uses: actions/setup-node@v6
         with:
           node-version: "22"
-      # @fiducia/test-config is a sibling `file:` devDependency; on this repo
-      # alone that path isn't present, so `npm install` is best-effort and the
-      # suite depends only on Node built-ins (node:test, global fetch).
-      - name: Install (best-effort; specs need only Node built-ins)
-        run: npm install || true
+      - name: Install
+        working-directory: fiducia-e2e
+        run: npm install
       - name: Lint (ESM syntax check)
+        working-directory: fiducia-e2e
         run: node scripts/lint.mjs
       - name: Conformance + smoke (skips with no endpoint)
+        working-directory: fiducia-e2e
         run: node --test
 
   # ───────────────────────────────────────────────────────────────────────────
@@ -41,12 +50,18 @@ jobs:
     runs-on: ubuntu-latest
     if: ${{ github.event_name == 'workflow_dispatch' }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+        with:
+          path: fiducia-e2e
+      - uses: actions/checkout@v7
+        with:
+          repository: fiducia-cloud/fiducia-test-config
+          path: fiducia-test-config
+      - uses: actions/setup-node@v6
         with:
           node-version: "22"
       - name: Check out fiducia-infra (kind tier)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: fiducia-cloud/fiducia-infra
           path: fiducia-infra
@@ -59,10 +74,13 @@ jobs:
           # kind-up.sh is expected to print the three LB URLs; wire them here:
           echo "FIDUCIA_E2E_ENDPOINTS=http://localhost:8091,http://localhost:8092,http://localhost:8093" >> "$GITHUB_ENV"
       - name: Install
-        run: npm install || true
+        working-directory: fiducia-e2e
+        run: npm install
       - name: Conformance
+        working-directory: fiducia-e2e
         run: node --test 'tests/conformance/**/*.test.mjs'
       - name: Chaos (cross-cluster quorum; non-disruptive)
+        working-directory: fiducia-e2e
         run: node --test 'tests/chaos/**/*.test.mjs'
         # To exercise the gated kill-a-cluster flow, set:
         #   FIDUCIA_E2E_ALLOW_DISRUPTIVE=1
