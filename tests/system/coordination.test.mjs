@@ -84,7 +84,21 @@ describe("coordination system: 3-node cluster behind the load balancer", { skip:
 
   before(async () => {
     stack = await bootCoordinationStack({ shardCount: 4, compactThreshold: 16 });
-    lb = new FiduciaClient(stack.lbUrl);
+    // Act as the trusted edge: present the shared secret plus a verified
+    // identity (org + scopes) on every request, exactly as fiducia-edge does
+    // after authenticating a customer. The LB checks the secret, adopts the
+    // identity, enforces scopes, and injects the org toward the node.
+    const edgeFetch = (url, init = {}) =>
+      fetch(url, {
+        ...init,
+        headers: {
+          ...(init.headers ?? {}),
+          "x-fiducia-edge-auth": INTERNAL_SECRET,
+          "x-fiducia-org-id": ORG,
+          "x-fiducia-scopes": "*",
+        },
+      });
+    lb = new FiduciaClient(stack.lbUrl, { fetch: edgeFetch });
     coordinatorShard = shardFor(LOCK_COORDINATION_KEY, stack.shardCount);
   }, { timeout: 900_000 }); // first run compiles two Rust workspaces
 
