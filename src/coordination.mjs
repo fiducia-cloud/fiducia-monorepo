@@ -29,7 +29,9 @@ const LB_REPO = "fiducia-load-balance.rs";
 export const INTERNAL_SECRET = "e2e-coordination-internal-secret";
 export const INTERNAL_AUTH_HEADER = "x-fiducia-internal-auth";
 
-/** Why the suite cannot run here, or null if all preconditions hold. */
+/** Why the suite cannot run here, or `false` if all preconditions hold —
+ *  the shape node:test's `{ skip }` expects (`skip: null` would SKIP the
+ *  suite while still running its `before` hook). */
 export function coordinationSkipReason() {
   if (process.env.FIDUCIA_E2E_SYSTEM !== "1") {
     return "set FIDUCIA_E2E_SYSTEM=1 to run the coordination system suite (builds + boots 3 fiducia-node + 1 fiducia-load-balance)";
@@ -39,7 +41,7 @@ export function coordinationSkipReason() {
       return `sibling checkout ${repo} not found (set FIDUCIA_REPOS_ROOT)`;
     }
   }
-  return null;
+  return false;
 }
 
 /** Run a command to completion, failing loudly with its combined output. */
