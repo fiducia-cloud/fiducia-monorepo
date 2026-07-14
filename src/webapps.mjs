@@ -24,6 +24,27 @@ export function repoPath(name) {
   return join(process.env.FIDUCIA_REPOS_ROOT ?? resolve(E2E_ROOT, ".."), name);
 }
 
+/**
+ * The `cargo` to build/run sibling Rust repos with. Prefer a rustup **proxy**
+ * over whatever `cargo` sits first on PATH: the fiducia repos pin their
+ * toolchain in `rust-toolchain.toml`, and only the proxy honors that pin — a
+ * plain distro/Homebrew cargo ignores it and fails `rust-version` checks
+ * (e.g. fiducia-customer requires 1.97 while Homebrew ships something else).
+ * Override with FIDUCIA_E2E_CARGO.
+ */
+export function cargoCommand() {
+  if (process.env.FIDUCIA_E2E_CARGO) return process.env.FIDUCIA_E2E_CARGO;
+  const home = process.env.HOME ?? "";
+  for (const candidate of [
+    join(home, ".cargo", "bin", "cargo"), // rustup's default proxy location
+    "/opt/homebrew/opt/rustup/bin/cargo", // Homebrew rustup (Apple Silicon)
+    "/usr/local/opt/rustup/bin/cargo", // Homebrew rustup (Intel)
+  ]) {
+    if (candidate && existsSync(candidate)) return candidate;
+  }
+  return "cargo";
+}
+
 function commandOnPath(name) {
   return (process.env.PATH ?? "")
     .split(delimiter)
