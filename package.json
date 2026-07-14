@@ -17,6 +17,8 @@
     "node": ">=22"
   },
   "devDependencies": {
-    "@fiducia/test-config": "file:../fiducia-test-config"
+    "@fiducia/test-config": "file:../fiducia-test-config",
+    "playwright": "^1.61.1",
+    "puppeteer": "^25.3.0"
   }
 }
