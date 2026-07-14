@@ -48,6 +48,7 @@ its state is indeterminate.
 | `FIDUCIA_E2E_KUBECTL` | kubectl binary path (default `kubectl`) |
 | `FIDUCIA_E2E_WEBAPPS` | `1` enables the heavyweight web-app composition test (`npm run test:webapps` sets it automatically) |
 | `FIDUCIA_E2E_SYSTEM` | `1` enables the heavyweight coordination composition suite (`npm run test:system` sets it automatically) |
+| `FIDUCIA_E2E_BROWSER` | `1` enables the real-Chromium login-journey suite (`npm run test:browser` sets it, plus `FIDUCIA_E2E_WEBAPPS=1` for the underlying stack) |
 | `FIDUCIA_E2E_ORG_ID` | optional; the org id the configured credential resolves to — enables the routing conformance suite's *exact* org-scoped `key → shard` assertions (bounds + stability are checked regardless) |
 | `FIDUCIA_REPOS_ROOT` | optional parent directory containing sibling checkouts for the composition suites (default: this repo's parent) |
 
