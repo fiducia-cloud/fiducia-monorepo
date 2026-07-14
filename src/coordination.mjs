@@ -20,7 +20,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
-import { makeRetryableReverseStop, repoPath, startStubBrain } from "./webapps.mjs";
+import { cargoCommand, cargoEnv, makeRetryableReverseStop, repoPath, startStubBrain } from "./webapps.mjs";
 
 const NODE_REPO = "fiducia-node.rs";
 const LB_REPO = "fiducia-load-balance.rs";
@@ -180,8 +180,8 @@ export async function bootCoordinationStack({ shardCount = 4, compactThreshold =
 
   // Sequential builds: two cargos racing over the shared registry/index lock
   // just serialize anyway, with noisier failure modes.
-  await run("cargo", ["build", "--quiet"], { cwd: nodeRepo });
-  await run("cargo", ["build", "--quiet"], { cwd: lbRepo });
+  await run(cargoCommand(), ["build", "--quiet"], { cwd: nodeRepo, env: { ...process.env, ...cargoEnv() } });
+  await run(cargoCommand(), ["build", "--quiet"], { cwd: lbRepo, env: { ...process.env, ...cargoEnv() } });
   const nodeBin = join(nodeRepo, "target", "debug", "fiducia-node");
   const lbBin = join(lbRepo, "target", "debug", "fiducia-load-balance");
 

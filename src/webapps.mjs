@@ -24,6 +24,38 @@ export function repoPath(name) {
   return join(process.env.FIDUCIA_REPOS_ROOT ?? resolve(E2E_ROOT, ".."), name);
 }
 
+/**
+ * The `cargo` to build/run sibling Rust repos with. Prefer a rustup **proxy**
+ * over whatever `cargo` sits first on PATH: the fiducia repos pin their
+ * toolchain in `rust-toolchain.toml`, and only the proxy honors that pin — a
+ * plain distro/Homebrew cargo ignores it and fails `rust-version` checks
+ * (e.g. fiducia-customer requires 1.97 while Homebrew ships something else).
+ * Override with FIDUCIA_E2E_CARGO.
+ */
+export function cargoCommand() {
+  if (process.env.FIDUCIA_E2E_CARGO) return process.env.FIDUCIA_E2E_CARGO;
+  const home = process.env.HOME ?? "";
+  for (const candidate of [
+    join(home, ".cargo", "bin", "cargo"), // rustup's default proxy location
+    "/opt/homebrew/opt/rustup/bin/cargo", // Homebrew rustup (Apple Silicon)
+    "/usr/local/opt/rustup/bin/cargo", // Homebrew rustup (Intel)
+  ]) {
+    if (candidate && existsSync(candidate)) return candidate;
+  }
+  return "cargo";
+}
+
+/**
+ * Env overrides that make the WHOLE toolchain honor the repo pin, not just the
+ * top-level cargo: cargo shells out to `rustc` via PATH, so the proxy's
+ * directory must come first or a distro rustc (wrong version) answers.
+ */
+export function cargoEnv() {
+  const cargo = cargoCommand();
+  if (cargo === "cargo") return {};
+  return { PATH: `${dirname(cargo)}${delimiter}${process.env.PATH ?? ""}` };
+}
+
 function commandOnPath(name) {
   return (process.env.PATH ?? "")
     .split(delimiter)
@@ -336,10 +368,11 @@ export async function bootWebAppStack() {
     );
 
     const auth = await startServer({
-      command: "cargo",
+      command: cargoCommand(),
       args: ["run", "--quiet"],
       cwd: repoPath("fiducia-auth.rs"),
       env: {
+        ...cargoEnv(),
         ...fiduciaAuthStubEnv(supabase, kv),
         FIDUCIA_INTROSPECT_SECRET: "e2e-introspect-secret",
         // fiducia-auth signs its KV requests
@@ -356,10 +389,11 @@ export async function bootWebAppStack() {
     stack.push(auth);
 
     const admin = await startServer({
-      command: "cargo",
+      command: cargoCommand(),
       args: ["run", "--quiet"],
       cwd: repoPath("fiducia-admin.rs"),
       env: {
+        ...cargoEnv(),
         DATABASE_URL: postgres.url("fiducia_admin"),
         FIDUCIA_AUTH_URL: auth.url,
         FIDUCIA_BRAIN_URL: brain.url,
@@ -376,10 +410,11 @@ export async function bootWebAppStack() {
     const customerDist = join(repoPath("fiducia-customer-ui.web"), "dist");
     const marketingDist = join(repoPath("fiducia-marketing.web"), "dist");
     const backend = await startServer({
-      command: "cargo",
+      command: cargoCommand(),
       args: ["run", "--quiet"],
       cwd: repoPath("fiducia-customer.rs"),
       env: {
+        ...cargoEnv(),
         DATABASE_URL: postgres.url("fiducia_customer"),
         FIDUCIA_AUTH_URL: auth.url,
         FIDUCIA_SITE_MODE: "customer",
