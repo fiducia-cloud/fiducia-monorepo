@@ -20,7 +20,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-import { endpoints, makeClient, primary } from "../../src/endpoints.mjs";
+import { endpoints, makeClient } from "../../src/endpoints.mjs";
 import { NO_ENDPOINT, uniqueKey, uniqueId, skipIfUndeployed } from "../helpers.mjs";
 
 // ---------------------------------------------------------------------------
@@ -91,7 +91,23 @@ describe("routing hash pins (cross-language anchor)", () => {
 
 // ---------------------------------------------------------------------------
 // 2. Deployed agreement — the cluster must route like the frozen hash says.
+//
+// One org-scoping subtlety: the node commits an org-owned key under its SCOPED
+// form (`\u0001{org}\u0001{key}` — fiducia_routing::org_scoped_key), so the
+// exact shard depends on the caller's org id. Coordinator routes (locks,
+// semaphores, service discovery) use cluster-reserved keys and stay exactly
+// predictable for every caller. For org-owned keys the suite always checks
+// bounds + stability, and checks the exact scoped hash when the operator says
+// which org the configured credential belongs to (FIDUCIA_E2E_ORG_ID).
 // ---------------------------------------------------------------------------
+
+/** fiducia-routing.rs `org_scoped_key`: the key the node actually hashes. */
+function orgScopedKey(orgId, key) {
+  return `\u0001${orgId}\u0001${key}`;
+}
+
+/** The org the configured credential resolves to, when the operator knows it. */
+const ORG_ID = process.env.FIDUCIA_E2E_ORG_ID || undefined;
 
 /** shard_count from /v1/status, or undefined when the endpoint hides it. */
 async function shardCountOf(client) {
@@ -101,7 +117,7 @@ async function shardCountOf(client) {
 }
 
 describe("deployed cluster routes keys like the frozen hash", { skip: NO_ENDPOINT }, () => {
-  it("KV writes commit on the shard the hash predicts", async (t) => {
+  it("KV writes commit on a stable, in-range shard (exact hash when the org is known)", async (t) => {
     const c = makeClient();
     await skipIfUndeployed(t, "GET /v1/status + PUT /v1/kv", async () => {
       const shardCount = await shardCountOf(c);
@@ -117,14 +133,17 @@ describe("deployed cluster routes keys like the frozen hash", { skip: NO_ENDPOIN
         if (shard === undefined) continue; // envelope doesn't carry the shard
         sawShard = true;
         assert.ok(shard < shardCount, `shard ${shard} out of range (< ${shardCount})`);
-        // WRONG BEHAVIOR => FAIL: the deployed path must hash exactly like
-        // fiducia-routing.rs, or clients and the cluster disagree where a key lives.
-        assert.equal(
-          shard,
-          shardFor(key, shardCount),
-          `key ${key} committed on shard ${shard}, hash says ${shardFor(key, shardCount)}`,
-        );
-        // Same key, same shard — routing is a pure function of (key, count).
+        if (ORG_ID) {
+          // WRONG BEHAVIOR => FAIL: the deployed path must hash the org-scoped
+          // key exactly like fiducia-routing.rs, or clients and the cluster
+          // disagree where a key lives.
+          assert.equal(
+            shard,
+            shardFor(orgScopedKey(ORG_ID, key), shardCount),
+            `key ${key} (org ${ORG_ID}) committed on shard ${shard}, hash says ${shardFor(orgScopedKey(ORG_ID, key), shardCount)}`,
+          );
+        }
+        // Same key, same shard — routing is a pure function of (org, key, count).
         const again = await c.kvPut(key, "route-check-2");
         assert.equal(shardOf(again), shard, "re-writing a key must hit the same shard");
       }
@@ -218,12 +237,19 @@ describe("deployed cluster routes keys like the frozen hash", { skip: NO_ENDPOIN
         const res = await c.kvPut(key, "cross-cluster");
         const shard = shardOf(res);
         if (shard === undefined) continue;
-        assert.equal(shard, shardFor(key, shardCount), `cluster ${url} disagrees with the hash`);
+        if (ORG_ID) {
+          assert.equal(
+            shard,
+            shardFor(orgScopedKey(ORG_ID, key), shardCount),
+            `cluster ${url} disagrees with the org-scoped hash`,
+          );
+        }
         if (!mapped.has(shardCount)) mapped.set(shardCount, new Set());
         mapped.get(shardCount).add(shard);
       }
-      // Clusters with the SAME shard_count must map the key identically —
-      // that is the whole reason the routing crate exists.
+      // Clusters with the SAME shard_count must map the key identically (the
+      // same credential means the same org, so the scoped key is identical
+      // everywhere) — that is the whole reason the routing crate exists.
       for (const [count, shards] of mapped) {
         assert.equal(shards.size, 1, `clusters with shard_count=${count} split the key: ${[...shards]}`);
       }
@@ -231,7 +257,3 @@ describe("deployed cluster routes keys like the frozen hash", { skip: NO_ENDPOIN
     });
   });
 });
-
-// Keep `primary` imported even when NO_ENDPOINT short-circuits the suite —
-// mirrors the import style of the sibling conformance specs.
-void primary;

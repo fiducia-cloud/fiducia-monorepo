@@ -19,6 +19,7 @@ composition uses the sibling `@fiducia/test-config` development harness.
 | **(a) Local single-cluster conformance** | `FIDUCIA_E2E_BASE_URL=http://127.0.0.1:8090` with `FIDUCIA_E2E_ALLOW_INSECURE_LOCALHOST=1` after `fiducia-infra/tools/kind-up.sh` | smoke and primitive conformance only; this cannot prove cross-cluster failover |
 | **(b) Real cross-cluster deployment** | `FIDUCIA_E2E_ENDPOINTS` = three independently routed `lb_endpoint` URLs from [`fiducia-infra/topology.toml`](../fiducia-infra/topology.toml) | staging or production quorum and chaos validation |
 | **(c) Local web/auth composition** | `npm run test:webapps` | boots real auth/admin/backend sibling checkouts against ephemeral stub identity/coordination services and scratch Postgres; proves login and authorization-plane separation without cloud dependencies |
+| **(d) Local coordination composition** | `npm run test:system` | boots a real 3-node `fiducia-node` Raft cluster (durable data dirs) behind a real `fiducia-load-balance` from sibling checkouts; proves LB↔node routing agreement (org-scoped `key → shard`), trusted-hop identity, lock fencing, log compaction, crash failover, and `InstallSnapshot` rejoin — no Docker, no cloud (see [`tests/system/README.md`](tests/system/README.md)) |
 
 The web/auth stack's `stop()` is concurrency-safe and retryable: completed
 cleanup steps are remembered and failed steps remain pending. Scratch Postgres
@@ -45,7 +46,9 @@ its state is indeterminate.
 | `FIDUCIA_E2E_CHAOS_SELECTOR` | node StatefulSet/pod selector (default `app.kubernetes.io/name=fiducia-node`) |
 | `FIDUCIA_E2E_KUBECTL` | kubectl binary path (default `kubectl`) |
 | `FIDUCIA_E2E_WEBAPPS` | `1` enables the heavyweight web-app composition test (`npm run test:webapps` sets it automatically) |
-| `FIDUCIA_REPOS_ROOT` | optional parent directory containing sibling web/auth/interface checkouts for the web-app test (default: this repo's parent) |
+| `FIDUCIA_E2E_SYSTEM` | `1` enables the heavyweight coordination composition suite (`npm run test:system` sets it automatically) |
+| `FIDUCIA_E2E_ORG_ID` | optional; the org id the configured credential resolves to — enables the routing conformance suite's *exact* org-scoped `key → shard` assertions (bounds + stability are checked regardless) |
+| `FIDUCIA_REPOS_ROOT` | optional parent directory containing sibling checkouts for the composition suites (default: this repo's parent) |
 
 Endpoint resolution order (`src/endpoints.mjs`): `FIDUCIA_E2E_ENDPOINTS` →
 `FIDUCIA_E2E_BASE_URL` → **none** (every suite skips).
@@ -128,6 +131,7 @@ npm run test:conformance    # just tests/conformance/
 npm run test:chaos          # just tests/chaos/
 npm run test:smoke          # just the reachability smoke
 npm run test:webapps        # real auth/admin/backend + local stubs/scratch PG
+npm run test:system         # real 3-node fiducia-node cluster + fiducia-load-balance
 npm run lint                # ESM syntax check (dependency-light, no ESLint)
 
 # Keep the same isolated web/auth stack running for interactive local use:
