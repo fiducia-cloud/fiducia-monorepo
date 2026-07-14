@@ -8,6 +8,12 @@ try {
   const nav = await pw.page.goto(stack.admin.url, { waitUntil: "domcontentloaded" });
   console.log("landing:", nav.status(), pw.page.url());
 
+  pw.page.on("request", (req) => {
+    if (req.method() === "POST") {
+      console.log("POST", req.url());
+      console.log("  headers:", JSON.stringify(req.headers(), null, 0).slice(0, 800));
+    }
+  });
   await pw.page.fill('input[name="email"]', OPERATOR.email);
   await pw.page.fill('input[name="password"]', OPERATOR.password);
   const [response] = await Promise.all([
