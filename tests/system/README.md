@@ -14,16 +14,20 @@ What it asserts, in order (stages share cluster state):
 1. every shard elects exactly one leader across the three members;
 2. the LB and the cluster agree with `fiducia-routing.rs` on key → shard
    (`result.shard` == FNV-1a(key) % shard_count) for every write;
-3. all lock traffic meets on the single lock-coordinator shard, with strictly
-   monotonic fencing tokens;
-4. each shard's log compacts into a snapshot once writes cross the threshold,
+3. all lock and semaphore traffic meets on the single lock-coordinator shard,
+   while different user keys remain independent;
+4. overlapping multi-key unions conflict atomically, failed unions reserve no
+   partial keys, retries are idempotent, and expired leases are fenced;
+5. a semaphore with `limit=3` admits exactly three concurrent holders, rejects
+   the fourth, and remains independent from semaphores under other keys;
+6. each shard's log compacts into a snapshot once writes cross the threshold,
    and the live log stays bounded on every member;
-5. a SIGKILL'd member does not interrupt service (quorum keeps committing
-   through the LB, routing agreement intact);
-6. the crashed member rejoins from its data dir and catches up past the
+7. a SIGKILL'd member does not interrupt service: quorum keeps committing and
+   pre-crash union-lock/semaphore state remains authoritative;
+8. the crashed member rejoins from its data dir and catches up past the
    survivors' compacted history (the `InstallSnapshot` path, with real
    processes) to the commit frontier;
-7. fencing tokens stay strictly monotonic across the crash and rejoin.
+9. fencing tokens stay strictly monotonic across the crash and rejoin.
 
 ## Running
 

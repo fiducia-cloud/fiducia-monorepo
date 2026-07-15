@@ -11,7 +11,7 @@ import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { setTimeout as delay } from "node:timers/promises";
 
-import { FiduciaClient } from "../../src/client.mjs";
+import { FiduciaClient, output } from "../../src/client.mjs";
 import { uniqueKey } from "../helpers.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -372,6 +372,103 @@ describe("Kind x3: cross-cluster node + brain Raft", { skip: SKIP, concurrency: 
     }, { label: "asymmetric-partition healing" });
   });
 
+  it("isolates one whole cluster while the surviving regions preserve coordination invariants (disruptive; gated)", {
+    skip: process.env.FIDUCIA_E2E_ALLOW_DISRUPTIVE !== "1",
+    timeout: 240_000,
+  }, async () => {
+    const survivor = edgeClient(clusters[0]);
+    const lockKeys = [uniqueKey("cluster-failover-lock-a"), uniqueKey("cluster-failover-lock-b")];
+    const lockHolder = uniqueKey("cluster-failover-lock-holder");
+    const lock = output(await survivor.lockMany({
+      keys: lockKeys,
+      holder: lockHolder,
+      ttlMs: 300_000,
+    }));
+    assert.equal(lock.acquired, true, "pre-partition union lock commits");
+
+    const semaphoreKey = uniqueKey("cluster-failover-semaphore");
+    const semaphoreHolders = [0, 1, 2].map((index) => uniqueKey(`cluster-failover-permit-${index}`));
+    const permits = [];
+    for (const holder of semaphoreHolders) {
+      permits.push(output(await survivor.semaphoreAcquire(semaphoreKey, {
+        holder,
+        ttlMs: 300_000,
+        limit: 3,
+      })));
+    }
+    assert.ok(permits.every((permit) => permit.acquired === true), "three permits commit before isolation");
+
+    await execFileAsync(PARTITION, ["isolate", "civo"], { timeout: 30_000 });
+    try {
+      await eventually(async () => {
+        const statuses = await nodeStatuses();
+        assertHealthyShardQuorums(statuses.slice(0, 2), "civo isolated survivor quorum");
+        const isolatedQuorumLeaders = statuses[2].consensus.shards
+          .filter((shard) => shard.role === "leader" && shard.has_quorum);
+        assert.equal(isolatedQuorumLeaders.length, 0, "isolated region has no write authority");
+      }, { timeoutMs: 90_000, label: "two-region quorum after whole-cluster isolation" });
+
+      const overlapping = output(await survivor.lockMany({
+        keys: [lockKeys[1], uniqueKey("cluster-failover-lock-c")],
+        holder: uniqueKey("cluster-failover-lock-contender"),
+        ttlMs: 60_000,
+      }));
+      assert.equal(overlapping.acquired, false, "surviving quorum retains the union lock conflict");
+
+      const fourth = output(await survivor.semaphoreAcquire(semaphoreKey, {
+        holder: uniqueKey("cluster-failover-permit-four"),
+        ttlMs: 60_000,
+        limit: 3,
+      }));
+      assert.equal(fourth.acquired, false, "surviving quorum retains the three-permit cap");
+
+      const independentKey = uniqueKey("cluster-failover-independent-lock");
+      const independentHolder = uniqueKey("cluster-failover-independent-holder");
+      const independent = output(await survivor.tryLock(independentKey, {
+        holder: independentHolder,
+        ttlMs: 60_000,
+      }));
+      assert.equal(independent.acquired, true, "surviving quorum continues committing coordination writes");
+      await survivor.lockRelease(independentKey, {
+        holder: independentHolder,
+        fencingToken: independent.fencing_token,
+      });
+
+      let isolatedCommitted = false;
+      try {
+        const isolatedKey = uniqueKey("isolated-minority");
+        const response = await fetch(`${clusters[2].lbUrl}/v1/kv?key=${encodeURIComponent(isolatedKey)}`, {
+          method: "PUT",
+          headers: {
+            "content-type": "application/json",
+            "x-fiducia-edge-auth": INTERNAL_SECRET,
+            "x-fiducia-org-id": ORG,
+            "x-fiducia-scopes": "*",
+          },
+          body: JSON.stringify({ value: "must-not-commit" }),
+          signal: AbortSignal.timeout(20_000),
+        });
+        if (response.ok) isolatedCommitted = (await response.json())?.committed === true;
+      } catch {
+        // A transport failure/timeout is an acceptable fail-closed result.
+      }
+      assert.equal(isolatedCommitted, false, "isolated region cannot commit a minority write");
+    } finally {
+      await execFileAsync(PARTITION, ["heal"], { timeout: 30_000 });
+      await eventually(async () => {
+        assertHealthyShardQuorums(await nodeStatuses(), "post-whole-cluster-heal");
+      }, { timeoutMs: 90_000, label: "whole-cluster healing" });
+      await survivor.lockRelease(lockKeys[0], {
+        holder: lockHolder,
+        fencingToken: lock.fencing_token,
+      });
+      await Promise.all(permits.map((permit, index) => survivor.semaphoreRelease(semaphoreKey, {
+        holder: semaphoreHolders[index],
+        fencingToken: permit.fencing_token,
+      })));
+    }
+  });
+
   it("rejoins a replaced node from durable state without losing committed data (disruptive; gated)", {
     skip: process.env.FIDUCIA_E2E_ALLOW_DISRUPTIVE !== "1",
     timeout: 180_000,
@@ -445,10 +542,13 @@ describe("Kind x3: cross-cluster node + brain Raft", { skip: SKIP, concurrency: 
     }
 
     await eventually(async () => {
-      const statuses = await nodeStatuses();
-      assert.equal(leadersByShard(statuses).size, statuses[0].consensus.shard_count);
-    }, { label: "post-partition node convergence" });
-    const healed = await edgeClient(clusters[0]).kvPut(uniqueKey("post-heal"), "committed");
+      assertHealthyShardQuorums(await nodeStatuses(), "post-split-heal");
+    }, { timeoutMs: 90_000, label: "post-partition node convergence" });
+    const healedKey = uniqueKey("post-heal");
+    const healed = await eventually(
+      () => edgeClient(clusters[0]).kvPut(healedKey, "committed"),
+      { timeoutMs: 60_000, intervalMs: 500, label: "post-partition LB route convergence" },
+    );
     assert.equal(healed?.committed, true, "healed quorum accepts new writes");
   });
 });

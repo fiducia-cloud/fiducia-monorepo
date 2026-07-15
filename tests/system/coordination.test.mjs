@@ -9,7 +9,9 @@
 //   * a member crash keeps the service available (quorum), and the crashed
 //     member rejoins from its data dir and catches up — across log compaction,
 //     so the InstallSnapshot path is exercised with real processes;
-//   * lock fencing tokens stay strictly monotonic through all of the above.
+//   * independent locks, atomic multi-key unions, expiring leases, and
+//     three-permit semaphores retain their invariants through real Raft;
+//   * coordination state and fencing tokens survive member failure.
 //
 // Opt-in and heavyweight: FIDUCIA_E2E_SYSTEM=1 (or `npm run test:system`).
 // Tests are ORDERED — each stage builds on the cluster state of the previous.
@@ -130,6 +132,7 @@ describe("coordination system: 3-node cluster behind the load balancer", { skip:
   let lb;
   let coordinatorShard;
   let fencingBeforeCrash;
+  let coordinationBeforeCrash;
   const contestedKey = uniqueKey("system-contested-lock");
 
   before(async () => {
@@ -315,6 +318,168 @@ describe("coordination system: 3-node cluster behind the load balancer", { skip:
     });
   });
 
+  it("allows different lock keys concurrently without conflating their holders", { timeout: 120_000 }, async () => {
+    const keys = [uniqueKey("independent-lock-a"), uniqueKey("independent-lock-b")];
+    const holders = [uniqueId("independent-a"), uniqueId("independent-b")];
+    const grants = (await Promise.all(keys.map((key, index) =>
+      lb.tryLock(key, { holder: holders[index], ttlMs: 60_000 })))).map(output);
+
+    assert.ok(grants.every((grant) => grant.acquired === true), "different keys must acquire concurrently");
+    assert.ok(grants.every((grant) => Number.isInteger(grant.fencing_token)), "each grant is fenced");
+    assert.notEqual(grants[0].fencing_token, grants[1].fencing_token, "independent grants have distinct authority");
+
+    const sameKeyContest = output(await lb.tryLock(keys[0], {
+      holder: uniqueId("independent-contender"),
+      ttlMs: 60_000,
+    }));
+    assert.equal(sameKeyContest.acquired, false, "contention is isolated to the matching key");
+
+    await Promise.all(keys.map((key, index) => lb.lockRelease(key, {
+      holder: holders[index],
+      fencingToken: grants[index].fencing_token,
+    })));
+  });
+
+  it("makes overlapping multi-key unions atomic and idempotent", { timeout: 120_000 }, async () => {
+    const [a, b, c] = [
+      uniqueKey("union-a"),
+      uniqueKey("union-b"),
+      uniqueKey("union-c"),
+    ];
+    const unionHolder = uniqueId("union-holder");
+    const overlapHolder = uniqueId("overlap-holder");
+    const grant = output(await lb.lockMany({
+      keys: [b, a, b],
+      holder: unionHolder,
+      ttlMs: 60_000,
+    }));
+    assert.equal(grant.acquired, true, "deduped union {a,b} acquires as one grant");
+
+    const retry = output(await lb.lockMany({
+      keys: [a, b],
+      holder: unionHolder,
+      ttlMs: 60_000,
+    }));
+    assert.equal(retry.acquired, true, "lost-response retry recovers the existing union");
+    assert.equal(retry.fencing_token, grant.fencing_token, "idempotent retry cannot mint new authority");
+
+    const overlap = output(await lb.lockMany({
+      keys: [b, c],
+      holder: overlapHolder,
+      ttlMs: 60_000,
+    }));
+    assert.equal(overlap.acquired, false, "one overlapping member blocks the whole requested union");
+
+    const cOnly = output(await lb.tryLock(c, { holder: overlapHolder, ttlMs: 60_000 }));
+    assert.equal(cOnly.acquired, true, "failed {b,c} did not partially reserve disjoint member c");
+
+    await lb.lockRelease(a, { holder: unionHolder, fencingToken: grant.fencing_token });
+    await lb.lockRelease(c, { holder: overlapHolder, fencingToken: cOnly.fencing_token });
+  });
+
+  it("expires an abandoned lock lease and fences its stale holder", { timeout: 120_000 }, async () => {
+    const key = uniqueKey("expiring-lock");
+    const staleHolder = uniqueId("stale-holder");
+    const nextHolder = uniqueId("next-holder");
+    const stale = output(await lb.tryLock(key, { holder: staleHolder, ttlMs: 250 }));
+    assert.equal(stale.acquired, true);
+
+    await delay(350);
+    const current = await eventually(async () => {
+      const result = output(await lb.tryLock(key, { holder: nextHolder, ttlMs: 60_000 }));
+      assert.equal(result.acquired, true, "expired lease must stop blocking progress");
+      return result;
+    }, { timeoutMs: 20_000, label: "expired lock lease replacement" });
+    assert.ok(current.fencing_token > stale.fencing_token, "replacement authority fences the expired holder");
+
+    const staleRelease = output(await lb.lockRelease(key, {
+      holder: staleHolder,
+      fencingToken: stale.fencing_token,
+    }));
+    assert.equal(staleRelease.released, false, "expired holder cannot release the replacement grant");
+    const view = await lb.lockGet(key);
+    assert.equal(view?.lock?.holder, nextHolder, "replacement remains authoritative after stale release");
+    await lb.lockRelease(key, { holder: nextHolder, fencingToken: current.fencing_token });
+  });
+
+  it("admits exactly three concurrent semaphore holders and isolates other semaphore keys", { timeout: 120_000 }, async () => {
+    const key = uniqueKey("semaphore-three");
+    const otherKey = uniqueKey("semaphore-independent");
+    const holders = [0, 1, 2, 3].map((index) => uniqueId(`permit-${index}`));
+    const firstThree = (await Promise.all(holders.slice(0, 3).map((holder) =>
+      lb.semaphoreAcquire(key, { holder, ttlMs: 60_000, limit: 3 })))).map(output);
+
+    assert.ok(firstThree.every((grant) => grant.acquired === true), "three permits admit three holders");
+    assert.equal(new Set(firstThree.map((grant) => grant.fencing_token)).size, 3, "every permit has distinct fencing");
+    assert.equal(firstThree.filter((grant) => grant.available === 0).length, 1, "exactly one serialized grant consumes the last permit");
+
+    const fourth = output(await lb.semaphoreAcquire(key, {
+      holder: holders[3],
+      ttlMs: 60_000,
+      limit: 3,
+    }));
+    assert.equal(fourth.acquired, false, "the fourth concurrent holder is refused");
+
+    const independent = output(await lb.semaphoreAcquire(otherKey, {
+      holder: holders[3],
+      ttlMs: 60_000,
+      limit: 1,
+    }));
+    assert.equal(independent.acquired, true, "a full semaphore does not consume another key's capacity");
+
+    const state = await lb.semaphoreGet(key);
+    assert.equal(state?.semaphore?.limit, 3);
+    assert.equal(state?.semaphore?.holders?.length, 3);
+    assert.equal(state?.semaphore?.available, 0);
+
+    await lb.semaphoreRelease(key, {
+      holder: holders[0],
+      fencingToken: firstThree[0].fencing_token,
+    });
+    const replacement = output(await lb.semaphoreAcquire(key, {
+      holder: holders[3],
+      ttlMs: 60_000,
+      limit: 3,
+    }));
+    assert.equal(replacement.acquired, true, "one release admits exactly one replacement");
+    assert.ok(replacement.fencing_token > firstThree[0].fencing_token, "replacement receives newer fencing");
+
+    const staleRelease = output(await lb.semaphoreRelease(key, {
+      holder: holders[0],
+      fencingToken: firstThree[0].fencing_token,
+    }));
+    assert.equal(staleRelease.released, false, "stale permit cannot evict a replacement");
+
+    await Promise.all([
+      ...firstThree.slice(1).map((grant, index) => lb.semaphoreRelease(key, {
+        holder: holders[index + 1],
+        fencingToken: grant.fencing_token,
+      })),
+      lb.semaphoreRelease(key, { holder: holders[3], fencingToken: replacement.fencing_token }),
+      lb.semaphoreRelease(otherKey, { holder: holders[3], fencingToken: independent.fencing_token }),
+    ]);
+  });
+
+  it("commits coordination state that must survive a Raft member crash", { timeout: 120_000 }, async () => {
+    const lockKeys = [uniqueKey("failover-union-a"), uniqueKey("failover-union-b")];
+    const lockHolder = uniqueId("failover-lock-holder");
+    const lock = output(await lb.lockMany({ keys: lockKeys, holder: lockHolder, ttlMs: 900_000 }));
+    assert.equal(lock.acquired, true);
+
+    const semaphoreKey = uniqueKey("failover-semaphore");
+    const semaphoreHolders = [0, 1, 2].map((index) => uniqueId(`failover-permit-${index}`));
+    const permits = [];
+    for (const holder of semaphoreHolders) {
+      permits.push(output(await lb.semaphoreAcquire(semaphoreKey, {
+        holder,
+        ttlMs: 900_000,
+        limit: 3,
+      })));
+    }
+    assert.ok(permits.every((permit) => permit.acquired === true));
+    coordinationBeforeCrash = { lockKeys, lockHolder, lock, semaphoreKey, semaphoreHolders, permits };
+  });
+
   it("compacts each shard's log once writes cross the threshold", { timeout: 180_000 }, async () => {
     // Deterministically push ≥ threshold+4 writes into EVERY shard (bucket the
     // keys with the same hash the cluster uses).
@@ -371,6 +536,30 @@ describe("coordination system: 3-node cluster behind the load balancer", { skip:
         "routing agreement holds during failover",
       );
     }
+
+    assert.ok(coordinationBeforeCrash, "pre-crash coordination grants must exist");
+    const lockContest = output(await eventually(() => lb.lockMany({
+      keys: [coordinationBeforeCrash.lockKeys[1], uniqueKey("failover-overlap")],
+      holder: uniqueId("failover-lock-contender"),
+      ttlMs: 60_000,
+    }), { timeoutMs: 30_000, label: "lock contention with one member down" }));
+    assert.equal(lockContest.acquired, false, "committed union lock remains exclusive after a member crash");
+
+    const permitContest = output(await eventually(() => lb.semaphoreAcquire(
+      coordinationBeforeCrash.semaphoreKey,
+      { holder: uniqueId("failover-permit-contender"), ttlMs: 60_000, limit: 3 },
+    ), { timeoutMs: 30_000, label: "semaphore contention with one member down" }));
+    assert.equal(permitContest.acquired, false, "committed semaphore cap remains enforced after a member crash");
+
+    await lb.lockRelease(coordinationBeforeCrash.lockKeys[0], {
+      holder: coordinationBeforeCrash.lockHolder,
+      fencingToken: coordinationBeforeCrash.lock.fencing_token,
+    });
+    await Promise.all(coordinationBeforeCrash.permits.map((permit, index) =>
+      lb.semaphoreRelease(coordinationBeforeCrash.semaphoreKey, {
+        holder: coordinationBeforeCrash.semaphoreHolders[index],
+        fencingToken: permit.fencing_token,
+      })));
   });
 
   it("a crashed member rejoins from disk and catches up past compacted history", { timeout: 240_000 }, async () => {
