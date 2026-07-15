@@ -127,16 +127,21 @@ scan_action_pins() {
   local label="$2"
   local action_output
 
+  # Immutable pins come in two shapes: a 40-hex commit SHA for repo actions,
+  # and a sha256 content digest for `docker://` actions (a digest is at least
+  # as immutable as a commit — the registry resolves it content-addressed).
   action_output="$(
     git -C "$repo" grep -n -E \
       'uses:[[:space:]]*[^[:space:]#]+@[^[:space:]#]+' -- \
       '.github/workflows/*.yml' '.github/workflows/*.yaml' 2>/dev/null \
       | grep -v -E \
         'uses:[[:space:]]*[^[:space:]#]+@[0-9a-f]{40}([[:space:]]|$)' \
+      | grep -v -E \
+        'uses:[[:space:]]*docker://[^[:space:]#]+@sha256:[0-9a-f]{64}([[:space:]]|$)' \
       || true
   )"
   if [[ -n "$action_output" ]]; then
-    fail "$label has GitHub Actions that are not pinned to full commit SHAs"
+    fail "$label has GitHub Actions that are not pinned to full commit SHAs (or docker digests)"
     printf '%s\n' "$action_output" >&2
   fi
 }
