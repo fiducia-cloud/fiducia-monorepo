@@ -16,6 +16,10 @@ Raft leadership and placement replication, cross-LB linearizable reads, and the
 deployment contract that neither consensus service is configured with NATS.
 Set `FIDUCIA_E2E_ALLOW_DISRUPTIVE=1` to add a gated 1–1–1 network partition: no
 minority may commit, and the healed group must converge and accept a new write.
+The gated tier also applies continental (~90 ms pairwise) WAN latency, injects
+a one-way Hetzner→Vultr partition, and replaces one node pod while retaining its
+PVC. It verifies quorum and cross-region reads throughout, then checks durable
+applied-index catch-up and committed data after the restarted member rejoins.
 
 The suite starts temporary `kubectl port-forward` processes for the brain peer
 Services and always terminates them. It never creates or deletes clusters.

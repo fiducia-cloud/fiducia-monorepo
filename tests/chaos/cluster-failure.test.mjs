@@ -19,8 +19,8 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-import { FiduciaClient, output } from "../../src/client.mjs";
-import { endpoints, apiKey } from "../../src/endpoints.mjs";
+import { output } from "../../src/client.mjs";
+import { endpoints, makeClient } from "../../src/endpoints.mjs";
 import { assertHealthyNodeStatus, uniqueKey, uniqueId, skipIfUndeployed } from "../helpers.mjs";
 import {
   disruptCluster as disruptWithKubectl,
@@ -33,7 +33,7 @@ const MULTI = eps.length >= 3
   : `cross-cluster chaos needs >=3 endpoints in FIDUCIA_E2E_ENDPOINTS (have ${eps.length})`;
 
 function clientFor(url) {
-  return new FiduciaClient(url, { apiKey: apiKey() });
+  return makeClient(url);
 }
 
 async function chaosHookAction(action, cluster) {

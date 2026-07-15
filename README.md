@@ -36,6 +36,8 @@ its state is indeterminate.
 | `FIDUCIA_E2E_BASE_URL` | single endpoint for a smoke run (e.g. `https://gcp.lb.fiducia.cloud`) |
 | `FIDUCIA_E2E_ENDPOINTS` | comma-separated list of cluster LB URLs for multi-cluster / chaos (e.g. `https://gcp.lb.fiducia.cloud,https://aws.lb.fiducia.cloud,https://hetzner.lb.fiducia.cloud`) |
 | `FIDUCIA_E2E_API_KEY` | optional; sent as `Authorization: Bearer <key>` on every request |
+| `FIDUCIA_E2E_LOCAL_EDGE_SECRET` | local three-Kind harness only; emulates the trusted edge for LB conformance and is refused unless the endpoint is loopback and insecure localhost is explicitly enabled |
+| `FIDUCIA_E2E_SCOPES` | scopes sent by the local trusted-edge adapter (default `admin:read admin:write`) |
 | `FIDUCIA_E2E_RUN_ID` | optional high-entropy namespace for durable test keys; defaults to the GitHub run/attempt or a random UUID |
 | `FIDUCIA_E2E_ALLOW_INSECURE_LOCALHOST` | `1` permits plain HTTP only for localhost/loopback harnesses; all other endpoints require HTTPS |
 | `FIDUCIA_E2E_TIMEOUT_MS` | per-request timeout in milliseconds (default `15000`) |
@@ -51,7 +53,7 @@ its state is indeterminate.
 | `FIDUCIA_E2E_SYSTEM` | `1` enables the heavyweight coordination composition suite (`npm run test:system` sets it automatically) |
 | `FIDUCIA_E2E_MULTICLUSTER` | `1` enables the three-Kind-cluster suite (`npm run test:multicluster` sets it automatically) |
 | `FIDUCIA_E2E_BROWSER` | `1` enables the real-Chromium login-journey suite (`npm run test:browser` sets it, plus `FIDUCIA_E2E_WEBAPPS=1` for the underlying stack) |
-| `FIDUCIA_E2E_ORG_ID` | optional; the org id the configured credential resolves to — enables the routing conformance suite's *exact* org-scoped `key → shard` assertions (bounds + stability are checked regardless) |
+| `FIDUCIA_E2E_ORG_ID` | the org id the configured credential resolves to; required with `FIDUCIA_E2E_LOCAL_EDGE_SECRET`, otherwise optional — enables exact org-scoped `key → shard` assertions |
 | `FIDUCIA_REPOS_ROOT` | optional parent directory containing sibling checkouts for the composition suites (default: this repo's parent) |
 
 Endpoint resolution order (`src/endpoints.mjs`): `FIDUCIA_E2E_ENDPOINTS` →
@@ -123,9 +125,10 @@ With `FIDUCIA_E2E_ENDPOINTS` listing ≥3 cluster LBs it asserts:
 Disruptive mode changes live Kubernetes workloads. Keep it disabled except in a
 dedicated chaos environment with a verified hook or context mapping and selector.
 
-Fewer than 3 independently routed endpoints → the chaos suite skips. The local
-kind harness is one cluster with multiple labeled zones, so it is intentionally
-used only for smoke and conformance in CI.
+Fewer than 3 independently routed endpoints → the chaos suite skips. The legacy
+`tools/kind-up.sh` harness is one cluster and remains smoke/conformance-only;
+`kind/multicluster/up.sh` creates the three independent control planes exercised
+by `npm run test:multicluster` and the loopback trusted-edge conformance example.
 
 ## Run
 
@@ -147,6 +150,14 @@ node scripts/dev-stack.mjs
 bash ../fiducia-infra/tools/kind-up.sh
 FIDUCIA_E2E_BASE_URL=http://127.0.0.1:8090 \
 FIDUCIA_E2E_ALLOW_INSECURE_LOCALHOST=1 npm test
+
+# Three independent local clusters through their real LBs. These values are
+# disposable harness credentials from fiducia-infra/kind/multicluster/lib.sh,
+# never deployment credentials:
+FIDUCIA_E2E_ENDPOINTS="http://127.0.0.1:8093,http://127.0.0.1:8094,http://127.0.0.1:8095" \
+FIDUCIA_E2E_ALLOW_INSECURE_LOCALHOST=1 \
+FIDUCIA_E2E_LOCAL_EDGE_SECRET="emulation-internal-secret-do-not-use-in-prod" \
+FIDUCIA_E2E_ORG_ID="emulation-org" npm test
 
 # Point at a live deployment:
 FIDUCIA_E2E_ENDPOINTS="https://gcp.lb.fiducia.cloud,https://aws.lb.fiducia.cloud,https://hetzner.lb.fiducia.cloud" \
@@ -182,6 +193,10 @@ throwaway Postgres cluster and are never sent to a deployment. There are no
 `.env` files or hardcoded production tokens in `tests/` or `src/`. Disruptive
 chaos that mutates live Kubernetes workloads stays gated
 behind `FIDUCIA_E2E_ALLOW_DISRUPTIVE=1` plus an explicit hook/context mapping.
+The separate `FIDUCIA_E2E_LOCAL_EDGE_SECRET` adapter is restricted to an
+explicitly enabled loopback origin, pins each request to that exact origin, and
+refuses to run alongside an API key; it exists only to exercise the real LBs in
+the disposable three-Kind harness, which has no public identity provider.
 The deployment-facing suites have no third-party runtime packages. CI installs
 the local, commit-pinned `@fiducia/test-config` development harness from the
 lockfile for the opt-in composition contract, with package lifecycle scripts

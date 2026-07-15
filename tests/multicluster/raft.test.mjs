@@ -23,6 +23,7 @@ const ORG = process.env.FIDUCIA_E2E_ORG_ID || "emulation-org";
 const REPOS_ROOT = process.env.FIDUCIA_REPOS_ROOT
   || fileURLToPath(new URL("../../../", import.meta.url));
 const PARTITION = join(REPOS_ROOT, "fiducia-infra", "kind", "multicluster", "partition.sh");
+const NETEM = join(REPOS_ROOT, "fiducia-infra", "kind", "multicluster", "netem.sh");
 
 const clusters = [
   { name: "hetzner", context: "kind-fiducia-hetzner", nodeUrl: "http://127.0.0.1:8090", lbUrl: "http://127.0.0.1:8093" },
@@ -130,6 +131,33 @@ function leadersByShard(statuses) {
     }
   }
   return leaders;
+}
+
+function assertHealthyShardQuorums(statuses, label) {
+  const shardCount = statuses[0].consensus.shard_count;
+  const leaders = leadersByShard(statuses);
+  assert.equal(leaders.size, shardCount, `${label}: every shard has a leader`);
+  for (let shardId = 0; shardId < shardCount; shardId += 1) {
+    assert.equal(leaders.get(shardId)?.length, 1, `${label}: shard ${shardId} has one leader`);
+    const replicas = statuses.map((status) => status.consensus.shards
+      .find((shard) => shard.shard_id === shardId));
+    assert.equal(
+      new Set(replicas.map((shard) => shard.leader_id)).size,
+      1,
+      `${label}: shard ${shardId} leader agreement`,
+    );
+    const leader = replicas.find((shard) => shard.role === "leader");
+    assert.ok(leader?.has_quorum, `${label}: shard ${shardId} leader has quorum`);
+    assert.ok(leader?.healthy_replicas >= 2, `${label}: shard ${shardId} has >=2 healthy replicas`);
+  }
+}
+
+async function kubectl(cluster, args, options = {}) {
+  return execFileAsync(
+    process.env.FIDUCIA_E2E_KUBECTL || "kubectl",
+    ["--context", cluster.context, "--namespace", "fiducia", ...args],
+    { timeout: 120_000, maxBuffer: 4 * 1024 * 1024, ...options },
+  );
 }
 
 describe("Kind x3: cross-cluster node + brain Raft", { skip: SKIP, concurrency: 1 }, () => {
@@ -292,6 +320,103 @@ describe("Kind x3: cross-cluster node + brain Raft", { skip: SKIP, concurrency: 
         }
       }
     }
+  });
+
+  it("keeps quorum and cross-cluster reads under continental WAN latency (disruptive; gated)", {
+    skip: process.env.FIDUCIA_E2E_ALLOW_DISRUPTIVE !== "1",
+    timeout: 180_000,
+  }, async () => {
+    await execFileAsync(NETEM, ["continental"], { timeout: 30_000 });
+    try {
+      await eventually(async () => {
+        assertHealthyShardQuorums(await nodeStatuses(), "continental latency");
+      }, { timeoutMs: 60_000, label: "WAN-latency quorum" });
+
+      const clients = clusters.map(edgeClient);
+      for (let index = 0; index < clients.length; index += 1) {
+        const key = uniqueKey(`wan-${clusters[index].name}`);
+        const value = `wan-value-${index}`;
+        const write = await clients[index].kvPut(key, value);
+        assert.equal(write?.committed, true, `${clusters[index].name} commits under WAN latency`);
+        const read = await clients[(index + 1) % clients.length].kvGet(key);
+        assert.equal(read?.entry?.value, value, "another region reads the WAN-latency commit");
+      }
+    } finally {
+      await execFileAsync(NETEM, ["clear"], { timeout: 30_000 });
+    }
+    await eventually(async () => {
+      assertHealthyShardQuorums(await nodeStatuses(), "post-netem");
+    }, { label: "post-netem convergence" });
+  });
+
+  it("survives a one-way inter-cluster partition and converges after healing (disruptive; gated)", {
+    skip: process.env.FIDUCIA_E2E_ALLOW_DISRUPTIVE !== "1",
+    timeout: 180_000,
+  }, async () => {
+    await execFileAsync(PARTITION, ["directed", "hetzner", "vultr"], { timeout: 30_000 });
+    try {
+      await eventually(async () => {
+        assertHealthyShardQuorums(await nodeStatuses(), "directed partition");
+      }, { timeoutMs: 60_000, label: "asymmetric-partition quorum" });
+
+      const key = uniqueKey("directed-partition");
+      const write = await edgeClient(clusters[0]).kvPut(key, "survived");
+      assert.equal(write?.committed, true, "a one-way peer failure must not remove 2/3 write quorum");
+      const read = await edgeClient(clusters[1]).kvGet(key);
+      assert.equal(read?.entry?.value, "survived", "the peer on the other side observes the commit");
+    } finally {
+      await execFileAsync(PARTITION, ["heal"], { timeout: 30_000 });
+    }
+    await eventually(async () => {
+      assertHealthyShardQuorums(await nodeStatuses(), "post-directed-heal");
+    }, { label: "asymmetric-partition healing" });
+  });
+
+  it("rejoins a replaced node from durable state without losing committed data (disruptive; gated)", {
+    skip: process.env.FIDUCIA_E2E_ALLOW_DISRUPTIVE !== "1",
+    timeout: 180_000,
+  }, async () => {
+    const target = clusters[1];
+    const beforeStatuses = await nodeStatuses();
+    const beforeTarget = beforeStatuses.find((status) => status.consensus.node_id
+      === beforeStatuses[1].consensus.node_id);
+    const beforeApplied = new Map(beforeTarget.consensus.shards
+      .map((shard) => [shard.shard_id, shard.last_applied]));
+    const { stdout: oldUid } = await kubectl(target, [
+      "get", "pod", "fiducia-node-0", "--output", "jsonpath={.metadata.uid}",
+    ]);
+
+    const key = uniqueKey("durable-rejoin");
+    const write = await edgeClient(target).kvPut(key, "before-restart");
+    assert.equal(write?.committed, true, "pre-restart value commits");
+
+    await kubectl(target, ["delete", "pod", "fiducia-node-0", "--wait=true", "--timeout=60s"]);
+    await eventually(async () => {
+      const survivorRead = await edgeClient(clusters[2]).kvGet(key);
+      assert.equal(survivorRead?.entry?.value, "before-restart", "surviving quorum retains the value");
+    }, { timeoutMs: 60_000, intervalMs: 500, label: "survivor read after leader election" });
+    await kubectl(target, [
+      "wait", "--for=condition=Ready", "pod/fiducia-node-0", "--timeout=120s",
+    ]);
+    const { stdout: newUid } = await kubectl(target, [
+      "get", "pod", "fiducia-node-0", "--output", "jsonpath={.metadata.uid}",
+    ]);
+    assert.notEqual(newUid, oldUid, "Kubernetes replaced the node process");
+
+    await eventually(async () => {
+      const statuses = await nodeStatuses();
+      assertHealthyShardQuorums(statuses, "durable rejoin");
+      const restarted = statuses[1];
+      for (const shard of restarted.consensus.shards) {
+        assert.equal(shard.storage_healthy, true, `rejoined shard ${shard.shard_id} storage is healthy`);
+        assert.ok(
+          shard.last_applied >= beforeApplied.get(shard.shard_id),
+          `rejoined shard ${shard.shard_id} did not regress its applied index`,
+        );
+      }
+    }, { timeoutMs: 120_000, label: "durable node catch-up" });
+    const restartedRead = await edgeClient(target).kvGet(key);
+    assert.equal(restartedRead?.entry?.value, "before-restart", "restarted region serves retained data");
   });
 
   it("refuses commits in a 1-1-1 split and converges after healing (disruptive; gated)", {

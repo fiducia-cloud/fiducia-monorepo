@@ -11,15 +11,16 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { setTimeout as delay } from "node:timers/promises";
 
-import { HttpError } from "../../src/client.mjs";
+import { HttpError, output } from "../../src/client.mjs";
 import { makeClient } from "../../src/endpoints.mjs";
 import { NO_ENDPOINT, uniqueKey, skipIfUndeployed } from "../helpers.mjs";
 
-// GET returns {key, found, entry}. The version field is `revision` (kvPut CAS
-// uses prev_revision), but tolerate `version`. VERIFY against PROTOCOL.md.
+// GET returns {key, found, entry}. The stored entry uses `mod_revision`, while
+// writes and CAS use `revision` / `prev_revision`; tolerate older aliases so
+// this black-box suite can still identify a mixed-version deployment.
 function revisionOf(getRes) {
   const e = getRes?.entry ?? getRes?.result?.output ?? getRes;
-  return e?.revision ?? e?.version ?? e?.rev;
+  return e?.mod_revision ?? e?.revision ?? e?.version ?? e?.rev;
 }
 function valueOf(getRes) {
   const e = getRes?.entry ?? getRes?.result?.output ?? getRes;
@@ -71,7 +72,12 @@ describe("config KV + watch", { skip: NO_ENDPOINT }, () => {
       let rejected = false;
       try {
         const res = await c.kvPut(key, "v3-stale", { prevRevision: rev });
-        if (res && (res.committed === false || res.result?.output?.committed === false || res.result?.output?.updated === false)) {
+        const result = output(res);
+        if (
+          result?.ok === false &&
+          result?.reason === "cas_mismatch" &&
+          result?.current_revision !== rev
+        ) {
           rejected = true;
         }
       } catch (err) {
