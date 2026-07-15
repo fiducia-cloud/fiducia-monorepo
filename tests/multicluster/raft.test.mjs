@@ -55,12 +55,12 @@ async function freePort() {
   return port;
 }
 
-async function startBrainForward(cluster) {
+async function startForward(cluster, resource, remotePort, label) {
   const port = await freePort();
   let logs = "";
   const child = spawn(
     process.env.FIDUCIA_E2E_KUBECTL || "kubectl",
-    ["--context", cluster.context, "--namespace", "fiducia", "port-forward", "service/fiducia-brain-peer-ext", `${port}:9095`],
+    ["--context", cluster.context, "--namespace", "fiducia", "port-forward", resource, `${port}:${remotePort}`],
     { detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"] },
   );
   const append = (chunk) => { logs = (logs + String(chunk)).slice(-8192); };
@@ -80,12 +80,20 @@ async function startBrainForward(cluster) {
       if (child.exitCode !== null) throw new Error(`port-forward exited ${child.exitCode}: ${logs}`);
       const response = await fetch(`http://127.0.0.1:${port}/healthz`, { signal: AbortSignal.timeout(1_000) });
       assert.equal(response.status, 200);
-    }, { timeoutMs: 20_000, intervalMs: 200, label: `${cluster.name} brain port-forward` });
+    }, { timeoutMs: 20_000, intervalMs: 200, label: `${cluster.name} ${label} port-forward` });
     return { url: `http://127.0.0.1:${port}`, stop };
   } catch (error) {
     await stop();
     throw error;
   }
+}
+
+async function startBrainForward(cluster) {
+  return startForward(cluster, "service/fiducia-brain-peer-ext", 9095, "brain");
+}
+
+async function startSidecarForward(cluster, pod) {
+  return startForward(cluster, `pod/${pod}`, 8091, `${pod} sidecar`);
 }
 
 async function nodeStatuses() {
@@ -234,6 +242,55 @@ describe("Kind x3: cross-cluster node + brain Raft", { skip: SKIP, concurrency: 
         brainSidecar.ports?.some((port) => port.name === "sidecar" && port.containerPort === 8091),
         "brain profile exposes the shared metrics endpoint",
       );
+    }
+  });
+
+  it("serves healthy role-specific metrics from every node and brain sidecar", { timeout: 90_000 }, async () => {
+    const profiles = [
+      {
+        pod: "fiducia-node-0",
+        target: "node",
+        families: ["fiducia_node_up", "fiducia_raft_term"],
+        heartbeats: true,
+      },
+      {
+        pod: "fiducia-brain-0",
+        target: "brain",
+        families: ["fiducia_brain_up", "fiducia_placement_generation"],
+        heartbeats: false,
+      },
+    ];
+
+    for (const cluster of clusters) {
+      for (const profile of profiles) {
+        const forward = await startSidecarForward(cluster, profile.pod);
+        try {
+          const response = await fetch(`${forward.url}/metrics`, { signal: AbortSignal.timeout(5_000) });
+          assert.equal(response.status, 200, `${cluster.name} ${profile.target} metrics HTTP 200`);
+          const body = await response.text();
+          assert.match(body, /^fiducia_sidecar_up 1$/m, `${cluster.name} ${profile.target} sidecar is up`);
+          assert.match(
+            body,
+            new RegExp(`^fiducia_sidecar_scrape_up\\{[^\\n]*target="${profile.target}"[^\\n]*\\} 1$`, "m"),
+            `${cluster.name} ${profile.target} upstream scrape is healthy`,
+          );
+          for (const family of profile.families) {
+            assert.match(body, new RegExp(`^${family}(?:\\{| )`, "m"), `${cluster.name} exports ${family}`);
+          }
+
+          const attempts = Number(body.match(/^fiducia_sidecar_heartbeat_attempts_total (\d+)$/m)?.[1]);
+          const successes = Number(body.match(/^fiducia_sidecar_heartbeat_successes_total (\d+)$/m)?.[1]);
+          if (profile.heartbeats) {
+            assert.ok(attempts > 0, `${cluster.name} node sidecar attempted heartbeats`);
+            assert.ok(successes > 0, `${cluster.name} node sidecar completed heartbeats`);
+          } else {
+            assert.equal(attempts, 0, `${cluster.name} brain exporter does not register a fake node`);
+            assert.equal(successes, 0, `${cluster.name} brain exporter does not send heartbeats`);
+          }
+        } finally {
+          await forward.stop();
+        }
+      }
     }
   });
 
