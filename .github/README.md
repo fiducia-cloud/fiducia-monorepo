@@ -1,5 +1,6 @@
-# GitHub automation
+# .github
 
-CI configuration for dependency-light conformance tests and gated heavyweight
-tiers. Default CI must skip undeployed operational suites honestly; Kind,
-browser, system, and disruptive chaos tiers run only when explicitly enabled.
+GitHub Actions for `fiducia-e2e` — CI (fmt, clippy `-D warnings`, locked tests,
+`cargo audit`) plus the repo's deploy/docker/flags workflows where present.
+Workflow actions are pinned to full commit SHAs per the fleet's
+reproducible-build policy (audited by the monorepo's `audit-repo-state.sh`).

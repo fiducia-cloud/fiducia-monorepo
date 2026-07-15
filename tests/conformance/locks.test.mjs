@@ -40,6 +40,38 @@ describe("locks / mutual exclusion", { skip: NO_ENDPOINT }, () => {
     });
   });
 
+  it("locks on DIFFERENT keys never compete (independent grants coexist)", async (t) => {
+    const c = makeClient();
+    const k1 = uniqueKey("locks-indep-1");
+    const k2 = uniqueKey("locks-indep-2");
+    const a = uniqueId("holder-a");
+    const b = uniqueId("holder-b");
+
+    await skipIfUndeployed(t, "POST /v1/locks/acquire (independent keys)", async () => {
+      // Holder A takes k1 and KEEPS it. Holder B's lock on the unrelated k2
+      // must be granted immediately — two different keys share no state.
+      const first = output(await c.tryLock(k1, { holder: a, ttlMs: TTL }));
+      assert.equal(first.acquired, true, "k1 should be granted to holder A");
+
+      // WRONG BEHAVIOR => FAIL: an unrelated key must not be blocked.
+      const second = output(await c.tryLock(k2, { holder: b, ttlMs: TTL }));
+      assert.equal(
+        second.acquired,
+        true,
+        "a lock on a DIFFERENT key must be granted while k1 is held — different keys never compete",
+      );
+
+      // Both grants are live at the same time and independently inspectable.
+      const k1State = output(await c.lockGet(k1));
+      const k2State = output(await c.lockGet(k2));
+      assert.equal(k1State.held ?? k1State.locked ?? true, true, "k1 still held by A");
+      assert.equal(k2State.held ?? k2State.locked ?? true, true, "k2 held by B concurrently");
+
+      await c.lockRelease(k1, { holder: a, fencingToken: first.fencing_token });
+      await c.lockRelease(k2, { holder: b, fencingToken: second.fencing_token });
+    });
+  });
+
   it("multi-key union lock is all-or-nothing (conflicts on any member)", async (t) => {
     const c = makeClient();
     const k1 = uniqueKey("locks-union-1");

@@ -225,6 +225,73 @@ export class FiduciaClient {
     return this.request("GET", `/v1/elections/${enc(name)}`);
   }
 
+  // --- counters (replicated i64 with CAS via mod_revision) ---
+  counterGet(key) {
+    return this.request("GET", `/v1/counters?key=${enc(key)}`);
+  }
+  counterAdd(key, { delta, prevRevision } = {}) {
+    return this.request("POST", "/v1/counters/add", {
+      key,
+      delta,
+      prev_revision: prevRevision,
+    });
+  }
+  counterSet(key, { value, prevRevision } = {}) {
+    return this.request("POST", "/v1/counters/set", {
+      key,
+      value,
+      prev_revision: prevRevision,
+    });
+  }
+
+  // --- barriers (fan-in with resolution policies) ---
+  barrierGet(name) {
+    return this.request("GET", `/v1/barriers?name=${enc(name)}`);
+  }
+  barrierCreate({ name, policy, expected, deadlineMs }) {
+    return this.request("POST", "/v1/barriers/create", {
+      name,
+      policy,
+      expected,
+      deadline_ms: deadlineMs,
+    });
+  }
+  barrierArrive({ name, participant, weight, veto }) {
+    return this.request("POST", "/v1/barriers/arrive", { name, participant, weight, veto });
+  }
+
+  // --- tasks (claimable work; exclusive owner holds a fencing token) ---
+  taskGet(name) {
+    return this.request("GET", `/v1/tasks?name=${enc(name)}`);
+  }
+  taskCreate({ name, taskType, payload, deadlineMs }) {
+    return this.request("POST", "/v1/tasks/create", {
+      name,
+      task_type: taskType,
+      payload,
+      deadline_ms: deadlineMs,
+    });
+  }
+  taskClaim({ name, worker, ttlMs }) {
+    return this.request("POST", "/v1/tasks/claim", { name, worker, ttl_ms: ttlMs });
+  }
+  taskComplete({ name, worker, fencingToken, result }) {
+    return this.request("POST", "/v1/tasks/complete", {
+      name,
+      worker,
+      fencing_token: fencingToken,
+      result,
+    });
+  }
+  taskFail({ name, worker, fencingToken, retryable }) {
+    return this.request("POST", "/v1/tasks/fail", {
+      name,
+      worker,
+      fencing_token: fencingToken,
+      retryable,
+    });
+  }
+
   // --- cron / scheduling ---
   scheduleUpsert(name, { cron, oneShotAtMs, target, delivery, maxRetries } = {}) {
     return this.request("PUT", `/v1/cron/schedules/${enc(name)}`, {
