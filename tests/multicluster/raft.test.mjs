@@ -197,6 +197,46 @@ describe("Kind x3: cross-cluster node + brain Raft", { skip: SKIP, concurrency: 
     assert.equal(leadersByShard(await nodeStatuses()).size > 0, true, "Raft remains live with that NATS-free deployment");
   });
 
+  it("uses one sidecar image with role-specific node and brain profiles", async () => {
+    for (const cluster of clusters) {
+      const { stdout } = await execFileAsync(
+        process.env.FIDUCIA_E2E_KUBECTL || "kubectl",
+        ["--context", cluster.context, "--namespace", "fiducia", "get", "statefulset", "fiducia-node", "fiducia-brain", "--output", "json"],
+        { timeout: 30_000, maxBuffer: 4 * 1024 * 1024 },
+      );
+      const workloads = Object.fromEntries(
+        JSON.parse(stdout).items.map((workload) => [workload.metadata.name, workload]),
+      );
+      const nodeSidecar = workloads["fiducia-node"].spec.template.spec.containers
+        .find((container) => container.name === "sidecar");
+      const brainSidecar = workloads["fiducia-brain"].spec.template.spec.containers
+        .find((container) => container.name === "sidecar");
+      assert.ok(nodeSidecar, `${cluster.name} node has the shared sidecar`);
+      assert.ok(brainSidecar, `${cluster.name} brain has the shared sidecar`);
+      assert.equal(nodeSidecar.image, brainSidecar.image, "node and brain use one operational image");
+
+      const env = (container) => Object.fromEntries(
+        (container.env ?? []).filter((entry) => "value" in entry).map((entry) => [entry.name, entry.value]),
+      );
+      assert.deepEqual(
+        [env(nodeSidecar).FIDUCIA_EXPORT_TARGET, env(nodeSidecar).FIDUCIA_SIDECAR_ROLE],
+        ["node", "full"],
+      );
+      assert.deepEqual(
+        [env(brainSidecar).FIDUCIA_EXPORT_TARGET, env(brainSidecar).FIDUCIA_SIDECAR_ROLE],
+        ["brain", "exporter"],
+      );
+      assert.ok(
+        nodeSidecar.ports?.some((port) => port.name === "sidecar" && port.containerPort === 8091),
+        "node profile exposes the shared metrics endpoint",
+      );
+      assert.ok(
+        brainSidecar.ports?.some((port) => port.name === "sidecar" && port.containerPort === 8091),
+        "brain profile exposes the shared metrics endpoint",
+      );
+    }
+  });
+
   it("refuses commits in a 1-1-1 split and converges after healing (disruptive; gated)", {
     skip: process.env.FIDUCIA_E2E_ALLOW_DISRUPTIVE !== "1",
     timeout: 180_000,
