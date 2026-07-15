@@ -21,6 +21,7 @@ composition uses the sibling `@fiducia/test-config` development harness.
 | **(c) Local web/auth composition** | `npm run test:webapps` | boots real auth/admin/backend sibling checkouts against ephemeral stub identity/coordination services and scratch Postgres; proves login and authorization-plane separation without cloud dependencies |
 | **(d) Local coordination composition** | `npm run test:system` | boots a real 3-node `fiducia-node` Raft cluster (durable data dirs) behind a real `fiducia-load-balance` from sibling checkouts; proves LB↔node routing agreement (org-scoped `key → shard`), trusted-hop identity, lock fencing, log compaction, crash failover, and `InstallSnapshot` rejoin — no Docker, no cloud (see [`tests/system/README.md`](tests/system/README.md)) |
 | **(e) Real-browser login journeys** | `npm run test:browser` | boots the same web/auth composition as (c) and drives it through actual Chromium — Playwright for the operator's admin sign-in/sign-out journey, Puppeteer for the separation/negative paths — so redirects, form posts, the cookie jar, and HttpOnly/SameSite are enforced by a real browser (see [`tests/browser/README.md`](tests/browser/README.md)) |
+| **(f) Three independent local clusters** | `npm run test:multicluster` after `fiducia-infra/kind/multicluster/up.sh` | drives the real node Raft groups, brain Raft group, and all three LBs across the Hetzner/Vultr/Civo Kind control planes; optional disruptive mode proves a 1–1–1 partition refuses writes and heals (see [`tests/multicluster/README.md`](tests/multicluster/README.md)) |
 
 The web/auth stack's `stop()` is concurrency-safe and retryable: completed
 cleanup steps are remembered and failed steps remain pending. Scratch Postgres
@@ -48,6 +49,7 @@ its state is indeterminate.
 | `FIDUCIA_E2E_KUBECTL` | kubectl binary path (default `kubectl`) |
 | `FIDUCIA_E2E_WEBAPPS` | `1` enables the heavyweight web-app composition test (`npm run test:webapps` sets it automatically) |
 | `FIDUCIA_E2E_SYSTEM` | `1` enables the heavyweight coordination composition suite (`npm run test:system` sets it automatically) |
+| `FIDUCIA_E2E_MULTICLUSTER` | `1` enables the three-Kind-cluster suite (`npm run test:multicluster` sets it automatically) |
 | `FIDUCIA_E2E_BROWSER` | `1` enables the real-Chromium login-journey suite (`npm run test:browser` sets it, plus `FIDUCIA_E2E_WEBAPPS=1` for the underlying stack) |
 | `FIDUCIA_E2E_ORG_ID` | optional; the org id the configured credential resolves to — enables the routing conformance suite's *exact* org-scoped `key → shard` assertions (bounds + stability are checked regardless) |
 | `FIDUCIA_REPOS_ROOT` | optional parent directory containing sibling checkouts for the composition suites (default: this repo's parent) |
@@ -134,6 +136,7 @@ npm run test:chaos          # just tests/chaos/
 npm run test:smoke          # just the reachability smoke
 npm run test:webapps        # real auth/admin/backend + local stubs/scratch PG
 npm run test:system         # real 3-node fiducia-node cluster + fiducia-load-balance
+npm run test:multicluster   # real Kind x3 node + brain Raft and three LBs
 npm run test:browser        # web/auth stack driven through Playwright + Puppeteer
 npm run lint                # ESM syntax check (dependency-light, no ESLint)
 

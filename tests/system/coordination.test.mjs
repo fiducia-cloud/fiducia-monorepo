@@ -18,7 +18,7 @@ import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { setTimeout as delay } from "node:timers/promises";
 
-import { FiduciaClient, output } from "../../src/client.mjs";
+import { FiduciaClient, HttpError, output } from "../../src/client.mjs";
 import {
   bootCoordinationStack,
   coordinationSkipReason,
@@ -50,6 +50,15 @@ const ORG = "e2e-system";
 const orgScopedKey = (key) => `\u0001${ORG}\u0001${key}`;
 const shardForOrgKey = (key, count) => shardFor(orgScopedKey(key), count);
 
+function keyForShard(prefix, targetShard, shardCount) {
+  const base = uniqueKey(prefix);
+  for (let suffix = 0; suffix < 100_000; suffix += 1) {
+    const key = `${base}-${suffix}`;
+    if (shardForOrgKey(key, shardCount) === targetShard) return key;
+  }
+  throw new Error(`could not generate a key for shard ${targetShard}`);
+}
+
 // --- small helpers -----------------------------------------------------------
 
 /** Retry `fn` until it stops throwing or the deadline passes. */
@@ -75,6 +84,40 @@ async function nodeStatus(nodeUrl) {
   });
   assert.ok(res.ok, `GET ${nodeUrl}/v1/status → HTTP ${res.status}`);
   return res.json();
+}
+
+function tailLines(value, count = 40) {
+  return String(value ?? "").split("\n").slice(-count).join("\n");
+}
+
+/** Capture bounded, secret-free state when a composition assertion times out. */
+async function coordinationDiagnostics(stack) {
+  const statuses = await Promise.all(
+    stack.nodeUrls.map(async (url) => {
+      try {
+        const status = await nodeStatus(url);
+        return {
+          url,
+          node_id: status.consensus.node_id,
+          shards: status.consensus.shards.map((shard) => ({
+            shard_id: shard.shard_id,
+            role: shard.role,
+            term: shard.term,
+            leader_id: shard.leader_id,
+            commit_index: shard.commit_index,
+            last_log_index: shard.last_log_index,
+            has_quorum: shard.has_quorum,
+          })),
+        };
+      } catch (error) {
+        return { url, error: error?.message ?? String(error) };
+      }
+    }),
+  );
+  const processLogs = ["lb", 0, 1, 2]
+    .map((member) => `--- ${member} log tail ---\n${tailLines(stack.logsOf(member))}`)
+    .join("\n");
+  return `status snapshots:\n${JSON.stringify(statuses, null, 2)}\n${processLogs}`;
 }
 
 const shardOf = (res) => res?.result?.shard;
@@ -133,6 +176,49 @@ describe("coordination system: 3-node cluster behind the load balancer", { skip:
     }, { timeoutMs: 60_000, label: "one leader per shard" });
   });
 
+  it("converges every replica on the same leader and term without apply-index inversion", { timeout: 120_000 }, async () => {
+    await eventually(async () => {
+      const statuses = await Promise.all(stack.nodeUrls.map(nodeStatus));
+      for (let shardId = 0; shardId < stack.shardCount; shardId += 1) {
+        const replicas = statuses.map((status) => status.consensus.shards.find((shard) => shard.shard_id === shardId));
+        assert.ok(replicas.every(Boolean), `every member must report shard ${shardId}`);
+        assert.equal(new Set(replicas.map((shard) => shard.leader_id)).size, 1, `shard ${shardId} leader agreement`);
+        assert.equal(new Set(replicas.map((shard) => shard.term)).size, 1, `shard ${shardId} term agreement`);
+        for (const replica of replicas) {
+          assert.ok(replica.last_applied <= replica.commit_index, `shard ${shardId} cannot apply beyond commit`);
+          assert.ok(replica.commit_index <= replica.last_log_index, `shard ${shardId} commit cannot exceed local log`);
+        }
+      }
+    }, { timeoutMs: 60_000, label: "replica leader/term agreement" });
+  });
+
+  it("a direct follower write returns a reroutable 307 leader hint for the correct shard", { timeout: 120_000 }, async () => {
+    const statuses = await Promise.all(stack.nodeUrls.map(nodeStatus));
+    const leaderId = statuses[0].consensus.shards[0].leader_id;
+    const followerIndex = statuses.findIndex((status) => status.consensus.node_id !== leaderId);
+    assert.notEqual(followerIndex, -1, "a three-member shard must have a follower");
+    const key = keyForShard("system-not-leader", 0, stack.shardCount);
+
+    const response = await fetch(`${stack.nodeUrls[followerIndex]}/v1/kv?key=${encodeURIComponent(key)}`, {
+      method: "PUT",
+      redirect: "manual",
+      headers: {
+        [INTERNAL_AUTH_HEADER]: INTERNAL_SECRET,
+        "x-fiducia-org-id": ORG,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ value: "must-not-commit-on-follower" }),
+      signal: AbortSignal.timeout(5_000),
+    });
+    assert.equal(response.status, 307, "followers must not accept a mutation locally");
+    assert.equal(response.headers.get("x-fiducia-not-leader"), "true");
+    assert.equal(response.headers.get("x-fiducia-shard"), "0");
+    assert.equal(response.headers.get("x-fiducia-leader"), leaderId);
+    const body = await response.json();
+    assert.equal(body?.committed, false);
+    assert.equal(body?.error?.reason, "not_leader");
+  });
+
   it("routes every key through the LB onto the shard the frozen hash predicts", { timeout: 120_000 }, async () => {
     for (let i = 0; i < 24; i++) {
       const key = uniqueKey(`system-routing-${i}`);
@@ -148,6 +234,44 @@ describe("coordination system: 3-node cluster behind the load balancer", { skip:
       const read = await eventually(() => lb.kvGet(key), { timeoutMs: 10_000, label: `kvGet ${key}` });
       assert.equal(read?.entry?.value, `v-${i}`, "read-your-write through the LB");
     }
+  });
+
+  it("rejects a stale KV compare-and-swap without changing the replicated value", { timeout: 120_000 }, async () => {
+    const key = uniqueKey("system-cas");
+    await lb.kvPut(key, "v1");
+    const first = await lb.kvGet(key);
+    const revision = first?.entry?.mod_revision;
+    assert.ok(Number.isInteger(revision), "KV reads must expose a numeric revision");
+    await lb.kvPut(key, "v2", { prevRevision: revision });
+
+    let rejected = false;
+    try {
+      const stale = await lb.kvPut(key, "v3-stale", { prevRevision: revision });
+      const staleOutput = output(stale);
+      rejected = staleOutput?.ok === false && staleOutput?.reason === "cas_mismatch";
+    } catch (error) {
+      if (error instanceof HttpError && error.status >= 400 && error.status < 500) rejected = true;
+      else throw error;
+    }
+    assert.equal(rejected, true, "a stale revision must not overwrite a newer value");
+    assert.equal((await lb.kvGet(key))?.entry?.value, "v2");
+  });
+
+  it("deduplicates concurrent idempotency claims to one fencing token", { timeout: 120_000 }, async () => {
+    const key = uniqueKey("system-idempotency-race");
+    const owner = uniqueId("idem-owner");
+    const [a, b] = await Promise.all([
+      lb.idempotencyClaim(key, { owner, ttlMs: 60_000 }),
+      lb.idempotencyClaim(key, { owner, ttlMs: 60_000 }),
+    ]);
+    const outcomes = [output(a), output(b)];
+    assert.equal(outcomes.filter((claim) => claim.claimed === true).length, 1, "exactly one proposal creates the claim");
+    assert.equal(outcomes.filter((claim) => claim.duplicate === true).length, 1, "the concurrent replay is a duplicate");
+    const tokens = outcomes.map((claim) => claim.fencing_token ?? claim.record?.fencing_token);
+    assert.ok(tokens.every(Number.isInteger));
+    assert.equal(tokens[1], tokens[0], "a retry must replay the original claim");
+    const view = await lb.idempotencyGet(key);
+    assert.equal(view?.record?.fencing_token, tokens[0], "the replicated record has one authority token");
   });
 
   it("coordinates every lock on the single coordinator shard with monotonic fencing", { timeout: 120_000 }, async () => {
@@ -174,6 +298,21 @@ describe("coordination system: 3-node cluster behind the load balancer", { skip:
     const token2 = output(second).fencing_token;
     assert.ok(token2 > token1, `fencing must advance: ${token2} > ${token1}`);
     fencingBeforeCrash = { holder: holder2, token: token2 };
+  });
+
+  it("serializes simultaneous mutex contenders so exactly one acquires", { timeout: 120_000 }, async () => {
+    const key = uniqueKey("system-lock-race");
+    const holders = [uniqueId("race-a"), uniqueId("race-b")];
+    const grants = await Promise.all(
+      holders.map((holder) => lb.tryLock(key, { holder, ttlMs: 60_000 })),
+    );
+    const outcomes = grants.map(output);
+    assert.equal(outcomes.filter((grant) => grant.acquired === true).length, 1, "mutex admits exactly one contender");
+    const winner = outcomes.findIndex((grant) => grant.acquired === true);
+    await lb.lockRelease(key, {
+      holder: holders[winner],
+      fencingToken: outcomes[winner].fencing_token,
+    });
   });
 
   it("compacts each shard's log once writes cross the threshold", { timeout: 180_000 }, async () => {
@@ -215,10 +354,16 @@ describe("coordination system: 3-node cluster behind the load balancer", { skip:
       const key = uniqueKey(`system-failover-${i}`);
       // Shards led by the dead member need an election; the LB needs redirect
       // repair. Both are bounded — writes must come back well inside the window.
-      const res = await eventually(() => lb.kvPut(key, "post-crash"), {
-        timeoutMs: 30_000,
-        label: `kvPut ${key} during failover`,
-      });
+      let res;
+      try {
+        res = await eventually(() => lb.kvPut(key, "post-crash"), {
+          timeoutMs: 30_000,
+          label: `kvPut ${key} during failover`,
+        });
+      } catch (error) {
+        const diagnostics = await coordinationDiagnostics(stack);
+        throw new Error(`${error.message}\n${diagnostics}`, { cause: error });
+      }
       assert.ok(committed(res));
       assert.equal(
         shardOf(res),
