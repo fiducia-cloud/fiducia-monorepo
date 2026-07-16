@@ -442,13 +442,13 @@ export class FiduciaClient {
         const { value, done } = await reader.read();
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
-        let boundary = buffer.indexOf("\n\n");
-        while (boundary >= 0) {
-          const block = buffer.slice(0, boundary);
-          buffer = buffer.slice(boundary + 2);
+        let boundary = /\r?\n\r?\n/.exec(buffer);
+        while (boundary) {
+          const block = buffer.slice(0, boundary.index);
+          buffer = buffer.slice(boundary.index + boundary[0].length);
           const evt = parseSseBlock(block);
           if (evt) yield evt;
-          boundary = buffer.indexOf("\n\n");
+          boundary = /\r?\n\r?\n/.exec(buffer);
         }
       }
     } finally {
