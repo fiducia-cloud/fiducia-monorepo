@@ -316,6 +316,57 @@ export class FiduciaClient {
     return this.request("POST", "/v1/effects/abort", { name });
   }
 
+  // --- handoffs (atomic ownership transfer with fencing tokens) ---
+  handoffGet(name) {
+    return this.request("GET", `/v1/handoffs?name=${enc(name)}`);
+  }
+  handoffOffer({ name, resource, from, to, fromToken, context, ttlMs }) {
+    return this.request("POST", "/v1/handoffs/offer", {
+      name,
+      resource,
+      from,
+      to,
+      from_token: fromToken,
+      context,
+      ttl_ms: ttlMs,
+    });
+  }
+  handoffAccept({ name, to }) {
+    return this.request("POST", "/v1/handoffs/accept", { name, to });
+  }
+  handoffReject({ name, to }) {
+    return this.request("POST", "/v1/handoffs/reject", { name, to });
+  }
+
+  // --- budgets (hierarchical reserve/commit/release spend control) ---
+  budgetGet(name) {
+    return this.request("GET", `/v1/budgets?name=${enc(name)}`);
+  }
+  budgetSet({ name, limit }) {
+    return this.request("POST", "/v1/budgets/set", { name, limit });
+  }
+  budgetReserve({ name, reservationId, holder, amount }) {
+    return this.request("POST", "/v1/budgets/reserve", {
+      name,
+      reservation_id: reservationId,
+      holder,
+      amount,
+    });
+  }
+  budgetCommit({ name, reservationId, actual }) {
+    return this.request("POST", "/v1/budgets/commit", {
+      name,
+      reservation_id: reservationId,
+      actual,
+    });
+  }
+  budgetRelease({ name, reservationId }) {
+    return this.request("POST", "/v1/budgets/release", {
+      name,
+      reservation_id: reservationId,
+    });
+  }
+
   // --- cron / scheduling ---
   scheduleUpsert(name, { cron, oneShotAtMs, target, delivery, maxRetries } = {}) {
     return this.request("PUT", `/v1/cron/schedules/${enc(name)}`, {
