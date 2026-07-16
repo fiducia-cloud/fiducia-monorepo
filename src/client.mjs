@@ -292,6 +292,30 @@ export class FiduciaClient {
     });
   }
 
+  // --- effects (approval-escrow: prepare -> approve -> commit, exactly once) ---
+  effectGet(name) {
+    return this.request("GET", `/v1/effects?name=${enc(name)}`);
+  }
+  effectPrepare({ name, effectType, payload, risk, idempotencyKey, requiredApprovals }) {
+    return this.request("POST", "/v1/effects/prepare", {
+      name,
+      effect_type: effectType,
+      payload,
+      risk,
+      idempotency_key: idempotencyKey,
+      required_approvals: requiredApprovals,
+    });
+  }
+  effectApprove({ name, principal }) {
+    return this.request("POST", "/v1/effects/approve", { name, principal });
+  }
+  effectCommit({ name, result }) {
+    return this.request("POST", "/v1/effects/commit", { name, result });
+  }
+  effectAbort({ name }) {
+    return this.request("POST", "/v1/effects/abort", { name });
+  }
+
   // --- cron / scheduling ---
   scheduleUpsert(name, { cron, oneShotAtMs, target, delivery, maxRetries } = {}) {
     return this.request("PUT", `/v1/cron/schedules/${enc(name)}`, {
