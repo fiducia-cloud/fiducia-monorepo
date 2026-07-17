@@ -60,13 +60,39 @@ export class FiduciaClient {
     const headers = {};
     if (body !== undefined) headers["content-type"] = "application/json";
     if (this.apiKey) headers["authorization"] = `Bearer ${this.apiKey}`;
-    const res = await this.fetchImpl(this.base + path, {
-      method,
-      headers: Object.keys(headers).length ? headers : undefined,
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-      redirect: "manual",
-      signal: AbortSignal.timeout(Number(process.env.FIDUCIA_E2E_TIMEOUT_MS || 15_000)),
-    });
+    // Direct-to-node runs (kind tiers) speak the trusted-hop contract the LB
+    // normally injects: the internal secret plus an org scope. Env-driven and
+    // off by default so LB-fronted runs are untouched.
+    const internal = process.env.FIDUCIA_E2E_INTERNAL_SECRET;
+    if (internal) {
+      headers["x-fiducia-internal-auth"] = internal;
+      headers["x-fiducia-org-id"] = process.env.FIDUCIA_E2E_ORG_ID || "fiducia-e2e";
+    }
+    // Leader failover for direct-to-node runs: a follower answers NotLeader as
+    // a 307 whose Location is the leader's cross-cluster address — often
+    // unreachable from the test host (kind bridge IPs on macOS). Instead of
+    // following it, retry the SAME path against each other configured endpoint
+    // (bounded), which is exactly the SDK's documented failover behavior.
+    const bases = [
+      this.base,
+      ...(process.env.FIDUCIA_E2E_ENDPOINTS || "")
+        .split(",")
+        .map((endpoint) => endpoint.trim())
+        .filter(Boolean)
+        .map((endpoint) => new URL(endpoint).origin)
+        .filter((origin) => origin !== this.base),
+    ];
+    let res;
+    for (const base of bases) {
+      res = await this.fetchImpl(base + path, {
+        method,
+        headers: Object.keys(headers).length ? headers : undefined,
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+        redirect: "manual",
+        signal: AbortSignal.timeout(Number(process.env.FIDUCIA_E2E_TIMEOUT_MS || 15_000)),
+      });
+      if (res.status !== 307 && res.status !== 308) break;
+    }
     const text = await res.text();
     let data = null;
     if (text) {
@@ -422,6 +448,12 @@ export class FiduciaClient {
   async *watch(path, signal) {
     const headers = { accept: "text/event-stream" };
     if (this.apiKey) headers["authorization"] = `Bearer ${this.apiKey}`;
+    // Same trusted-hop contract as request() for direct-to-node runs.
+    const internal = process.env.FIDUCIA_E2E_INTERNAL_SECRET;
+    if (internal) {
+      headers["x-fiducia-internal-auth"] = internal;
+      headers["x-fiducia-org-id"] = process.env.FIDUCIA_E2E_ORG_ID || "fiducia-e2e";
+    }
     const res = await this.fetchImpl(this.base + path, { method: "GET", headers, signal });
     if (!res.ok) {
       const text = await res.text().catch(() => "");

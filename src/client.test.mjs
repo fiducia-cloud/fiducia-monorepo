@@ -77,6 +77,14 @@ test("request preserves a non-JSON HTTP error for conformance diagnostics", asyn
 });
 
 test("kvWatch parses chunked CRLF SSE and carries authorization", async () => {
+  // This test pins the LB-fronted header contract (Bearer only). Clear the
+  // direct-to-node env so running the suite against a kind tier (which exports
+  // FIDUCIA_E2E_INTERNAL_SECRET) doesn't leak trusted-hop headers in here.
+  const savedSecret = process.env.FIDUCIA_E2E_INTERNAL_SECRET;
+  const savedOrg = process.env.FIDUCIA_E2E_ORG_ID;
+  delete process.env.FIDUCIA_E2E_INTERNAL_SECRET;
+  delete process.env.FIDUCIA_E2E_ORG_ID;
+  try {
   const chunks = [
     ': keepalive\r\nid: 7\r\nevent: change\r\ndata: {"revision":',
     "2}\r\n\r\n",
@@ -115,6 +123,10 @@ test("kvWatch parses chunked CRLF SSE and carries authorization", async () => {
     { event: "change", id: "7", data: { revision: 2 } },
     { event: "note", id: undefined, data: "hello\nworld" },
   ]);
+  } finally {
+    if (savedSecret !== undefined) process.env.FIDUCIA_E2E_INTERNAL_SECRET = savedSecret;
+    if (savedOrg !== undefined) process.env.FIDUCIA_E2E_ORG_ID = savedOrg;
+  }
 });
 
 test("API keys cannot be configured for an insecure non-local endpoint", () => {
