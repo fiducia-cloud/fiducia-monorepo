@@ -78,8 +78,10 @@ jobs:
           set -euo pipefail
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends postgresql postgresql-client
-          # The scratch Postgres harness shells out to these by name.
-          echo "/usr/lib/postgresql/$(ls /usr/lib/postgresql | sort -V | tail -1)/bin" >> "$GITHUB_PATH"
+          # The scratch Postgres harness shells out to these by name; put the
+          # newest installed server's bin dir on PATH (find, not ls, for SC2012).
+          pg_ver="$(find /usr/lib/postgresql -maxdepth 1 -mindepth 1 -type d -printf '%f\n' | sort -V | tail -1)"
+          echo "/usr/lib/postgresql/${pg_ver}/bin" >> "$GITHUB_PATH"
       - name: Install the pinned Rust toolchain (rustup honors each repo's rust-toolchain.toml)
         run: |
           set -euo pipefail
