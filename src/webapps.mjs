@@ -438,6 +438,10 @@ export async function bootWebAppStack() {
         FIDUCIA_SITE_MODE: "customer",
         SUPABASE_URL: supabase.url,
         SUPABASE_PUBLISHABLE_KEY: "stub-publishable-key",
+        // Debug-only: emit non-Secure session/CSRF/MFA cookies so the browser
+        // jar is inspectable over http://127.0.0.1 (Playwright's cookies(url)
+        // filters Secure cookies out of http origins). Mirrors the admin server.
+        FIDUCIA_INSECURE_COOKIES: "1",
         ...(existsSync(customerDist) ? { CUSTOMER_STATIC_DIR: customerDist } : {}),
         ...(existsSync(marketingDist) ? { STATIC_DIR: marketingDist } : {}),
       },
