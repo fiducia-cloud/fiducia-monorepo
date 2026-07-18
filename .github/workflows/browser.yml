@@ -1,0 +1,96 @@
+name: browser-e2e
+
+permissions:
+  contents: read
+
+# Heavy real-browser suite: boots the REAL fiducia-auth + fiducia-admin +
+# fiducia-customer from pinned sibling checkouts against the stub Supabase and a
+# scratch Postgres, then drives the customer portal + MFA journeys through both
+# Playwright and Puppeteer (one bundled Chromium backs both). Because it compiles
+# three Rust servers it is opt-in — manual dispatch plus a nightly schedule — and
+# NOT part of the per-PR gate (the no-cluster `e2e` job already proves the browser
+# specs parse and self-skip). It runs in the same Playwright Noble image the
+# k8s-cluster browser runners standardize on so the runtime matches production CI.
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Nightly at 04:17 UTC — heavy, so off the hot path.
+    - cron: "17 4 * * *"
+
+concurrency:
+  group: browser-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  customer-mfa-browser:
+    name: customer + MFA browser journeys
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    container:
+      image: mcr.microsoft.com/playwright:v1.56.0-noble
+    env:
+      # Playwright's bundled Chromium (shared by Puppeteer via the same binary).
+      PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
+      # Sibling checkouts land next to fiducia-e2e in the workspace, exactly the
+      # layout src/webapps.mjs' repoPath() expects (parent of the e2e checkout).
+      FIDUCIA_REPOS_ROOT: ${{ github.workspace }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+          path: fiducia-e2e
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+          repository: fiducia-cloud/fiducia-test-config
+          ref: 5f50faedbd887e831044e0017643822472bb12b3
+          path: fiducia-test-config
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+          repository: fiducia-cloud/fiducia-auth.rs
+          ref: f3e6f1c3a86d5f526242ce135b9a444c2c4fb7a5
+          path: fiducia-auth.rs
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+          repository: fiducia-cloud/fiducia-admin.rs
+          ref: b61da18e59896ed93d0b8f5260f5e28bdba5024a
+          path: fiducia-admin.rs
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+          repository: fiducia-cloud/fiducia-customer.rs
+          ref: 926ae94e1800b983d3d1850b42691999cebf7a4e
+          path: fiducia-customer.rs
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+          repository: fiducia-cloud/fiducia-interfaces
+          ref: dbf10fbb443f7b6a5cc6043faa10d2eb139a2f79
+          path: fiducia-interfaces
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: "22.17.0"
+      - name: Install PostgreSQL server tools (initdb/pg_ctl/psql for the scratch cluster)
+        run: |
+          set -euo pipefail
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends postgresql postgresql-client
+          # The scratch Postgres harness shells out to these by name; put the
+          # newest installed server's bin dir on PATH (find, not ls, for SC2012).
+          pg_ver="$(find /usr/lib/postgresql -maxdepth 1 -mindepth 1 -type d -printf '%f\n' | sort -V | tail -1)"
+          echo "/usr/lib/postgresql/${pg_ver}/bin" >> "$GITHUB_PATH"
+      - name: Install the pinned Rust toolchain (rustup honors each repo's rust-toolchain.toml)
+        run: |
+          set -euo pipefail
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+            | sh -s -- -y --default-toolchain none --profile minimal
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - name: Install locked dependencies (with browser lifecycle scripts)
+        working-directory: fiducia-e2e
+        run: npm ci
+      - name: Customer + MFA real-browser journeys
+        working-directory: fiducia-e2e
+        run: npm run test:browser
