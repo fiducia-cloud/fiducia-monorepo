@@ -357,7 +357,7 @@ export async function bootWebAppStack() {
 
   try {
     const supabase = await startStubSupabase({
-      users: [OPERATOR, CUSTOMER, ORGLESS],
+      users: [OPERATOR, CUSTOMER, ORGLESS, CUSTOMER_MFA],
       orgs: [
         { id: "org_infra", plan: "internal" },
         { id: "00000000-0000-4000-8000-000000000001", plan: "pro" },
