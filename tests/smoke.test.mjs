@@ -12,8 +12,15 @@ describe("smoke / reachability", { skip: NO_ENDPOINT }, () => {
     const c = makeClient();
     await skipIfUndeployed(t, "GET /healthz", async () => {
       const health = await c.health();
-      // PROTOCOL.md: health() -> {status, service}
-      assert.deepEqual(health, { status: "ok", service: "fiducia-node" });
+      // A direct-node smoke run identifies fiducia-node; the documented
+      // multi-cluster run targets regional LBs, whose own public probe must
+      // identify fiducia-load-balance. /v1/status below still proves the
+      // downstream node/consensus path.
+      assert.equal(health?.status, "ok");
+      assert.ok(
+        ["fiducia-node", "fiducia-load-balance"].includes(health?.service),
+        `unexpected health service identity: ${health?.service}`,
+      );
     });
   });
 

@@ -60,13 +60,39 @@ export class FiduciaClient {
     const headers = {};
     if (body !== undefined) headers["content-type"] = "application/json";
     if (this.apiKey) headers["authorization"] = `Bearer ${this.apiKey}`;
-    const res = await this.fetchImpl(this.base + path, {
-      method,
-      headers: Object.keys(headers).length ? headers : undefined,
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-      redirect: "manual",
-      signal: AbortSignal.timeout(Number(process.env.FIDUCIA_E2E_TIMEOUT_MS || 15_000)),
-    });
+    // Direct-to-node runs (kind tiers) speak the trusted-hop contract the LB
+    // normally injects: the internal secret plus an org scope. Env-driven and
+    // off by default so LB-fronted runs are untouched.
+    const internal = process.env.FIDUCIA_E2E_INTERNAL_SECRET;
+    if (internal) {
+      headers["x-fiducia-internal-auth"] = internal;
+      headers["x-fiducia-org-id"] = process.env.FIDUCIA_E2E_ORG_ID || "fiducia-e2e";
+    }
+    // Leader failover for direct-to-node runs: a follower answers NotLeader as
+    // a 307 whose Location is the leader's cross-cluster address — often
+    // unreachable from the test host (kind bridge IPs on macOS). Instead of
+    // following it, retry the SAME path against each other configured endpoint
+    // (bounded), which is exactly the SDK's documented failover behavior.
+    const bases = [
+      this.base,
+      ...(process.env.FIDUCIA_E2E_ENDPOINTS || "")
+        .split(",")
+        .map((endpoint) => endpoint.trim())
+        .filter(Boolean)
+        .map((endpoint) => new URL(endpoint).origin)
+        .filter((origin) => origin !== this.base),
+    ];
+    let res;
+    for (const base of bases) {
+      res = await this.fetchImpl(base + path, {
+        method,
+        headers: Object.keys(headers).length ? headers : undefined,
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+        redirect: "manual",
+        signal: AbortSignal.timeout(Number(process.env.FIDUCIA_E2E_TIMEOUT_MS || 15_000)),
+      });
+      if (res.status !== 307 && res.status !== 308) break;
+    }
     const text = await res.text();
     let data = null;
     if (text) {
@@ -225,6 +251,148 @@ export class FiduciaClient {
     return this.request("GET", `/v1/elections/${enc(name)}`);
   }
 
+  // --- counters (replicated i64 with CAS via mod_revision) ---
+  counterGet(key) {
+    return this.request("GET", `/v1/counters?key=${enc(key)}`);
+  }
+  counterAdd(key, { delta, prevRevision } = {}) {
+    return this.request("POST", "/v1/counters/add", {
+      key,
+      delta,
+      prev_revision: prevRevision,
+    });
+  }
+  counterSet(key, { value, prevRevision } = {}) {
+    return this.request("POST", "/v1/counters/set", {
+      key,
+      value,
+      prev_revision: prevRevision,
+    });
+  }
+
+  // --- barriers (fan-in with resolution policies) ---
+  barrierGet(name) {
+    return this.request("GET", `/v1/barriers?name=${enc(name)}`);
+  }
+  barrierCreate({ name, policy, expected, deadlineMs }) {
+    return this.request("POST", "/v1/barriers/create", {
+      name,
+      policy,
+      expected,
+      deadline_ms: deadlineMs,
+    });
+  }
+  barrierArrive({ name, participant, weight, veto }) {
+    return this.request("POST", "/v1/barriers/arrive", { name, participant, weight, veto });
+  }
+
+  // --- tasks (claimable work; exclusive owner holds a fencing token) ---
+  taskGet(name) {
+    return this.request("GET", `/v1/tasks?name=${enc(name)}`);
+  }
+  taskCreate({ name, taskType, payload, deadlineMs }) {
+    return this.request("POST", "/v1/tasks/create", {
+      name,
+      task_type: taskType,
+      payload,
+      deadline_ms: deadlineMs,
+    });
+  }
+  taskClaim({ name, worker, ttlMs }) {
+    return this.request("POST", "/v1/tasks/claim", { name, worker, ttl_ms: ttlMs });
+  }
+  taskComplete({ name, worker, fencingToken, result }) {
+    return this.request("POST", "/v1/tasks/complete", {
+      name,
+      worker,
+      fencing_token: fencingToken,
+      result,
+    });
+  }
+  taskFail({ name, worker, fencingToken, retryable }) {
+    return this.request("POST", "/v1/tasks/fail", {
+      name,
+      worker,
+      fencing_token: fencingToken,
+      retryable,
+    });
+  }
+
+  // --- effects (approval-escrow: prepare -> approve -> commit, exactly once) ---
+  effectGet(name) {
+    return this.request("GET", `/v1/effects?name=${enc(name)}`);
+  }
+  effectPrepare({ name, effectType, payload, risk, idempotencyKey, requiredApprovals }) {
+    return this.request("POST", "/v1/effects/prepare", {
+      name,
+      effect_type: effectType,
+      payload,
+      risk,
+      idempotency_key: idempotencyKey,
+      required_approvals: requiredApprovals,
+    });
+  }
+  effectApprove({ name, principal }) {
+    return this.request("POST", "/v1/effects/approve", { name, principal });
+  }
+  effectCommit({ name, result }) {
+    return this.request("POST", "/v1/effects/commit", { name, result });
+  }
+  effectAbort({ name }) {
+    return this.request("POST", "/v1/effects/abort", { name });
+  }
+
+  // --- handoffs (atomic ownership transfer with fencing tokens) ---
+  handoffGet(name) {
+    return this.request("GET", `/v1/handoffs?name=${enc(name)}`);
+  }
+  handoffOffer({ name, resource, from, to, fromToken, context, ttlMs }) {
+    return this.request("POST", "/v1/handoffs/offer", {
+      name,
+      resource,
+      from,
+      to,
+      from_token: fromToken,
+      context,
+      ttl_ms: ttlMs,
+    });
+  }
+  handoffAccept({ name, to }) {
+    return this.request("POST", "/v1/handoffs/accept", { name, to });
+  }
+  handoffReject({ name, to }) {
+    return this.request("POST", "/v1/handoffs/reject", { name, to });
+  }
+
+  // --- budgets (hierarchical reserve/commit/release spend control) ---
+  budgetGet(name) {
+    return this.request("GET", `/v1/budgets?name=${enc(name)}`);
+  }
+  budgetSet({ name, limit }) {
+    return this.request("POST", "/v1/budgets/set", { name, limit });
+  }
+  budgetReserve({ name, reservationId, holder, amount }) {
+    return this.request("POST", "/v1/budgets/reserve", {
+      name,
+      reservation_id: reservationId,
+      holder,
+      amount,
+    });
+  }
+  budgetCommit({ name, reservationId, actual }) {
+    return this.request("POST", "/v1/budgets/commit", {
+      name,
+      reservation_id: reservationId,
+      actual,
+    });
+  }
+  budgetRelease({ name, reservationId }) {
+    return this.request("POST", "/v1/budgets/release", {
+      name,
+      reservation_id: reservationId,
+    });
+  }
+
   // --- cron / scheduling ---
   scheduleUpsert(name, { cron, oneShotAtMs, target, delivery, maxRetries } = {}) {
     return this.request("PUT", `/v1/cron/schedules/${enc(name)}`, {
@@ -280,6 +448,12 @@ export class FiduciaClient {
   async *watch(path, signal) {
     const headers = { accept: "text/event-stream" };
     if (this.apiKey) headers["authorization"] = `Bearer ${this.apiKey}`;
+    // Same trusted-hop contract as request() for direct-to-node runs.
+    const internal = process.env.FIDUCIA_E2E_INTERNAL_SECRET;
+    if (internal) {
+      headers["x-fiducia-internal-auth"] = internal;
+      headers["x-fiducia-org-id"] = process.env.FIDUCIA_E2E_ORG_ID || "fiducia-e2e";
+    }
     const res = await this.fetchImpl(this.base + path, { method: "GET", headers, signal });
     if (!res.ok) {
       const text = await res.text().catch(() => "");
@@ -300,13 +474,13 @@ export class FiduciaClient {
         const { value, done } = await reader.read();
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
-        let boundary = buffer.indexOf("\n\n");
-        while (boundary >= 0) {
-          const block = buffer.slice(0, boundary);
-          buffer = buffer.slice(boundary + 2);
+        let boundary = /\r?\n\r?\n/.exec(buffer);
+        while (boundary) {
+          const block = buffer.slice(0, boundary.index);
+          buffer = buffer.slice(boundary.index + boundary[0].length);
           const evt = parseSseBlock(block);
           if (evt) yield evt;
-          boundary = buffer.indexOf("\n\n");
+          boundary = /\r?\n\r?\n/.exec(buffer);
         }
       }
     } finally {

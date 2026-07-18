@@ -18,7 +18,10 @@ export function endpoints() {
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean)
-      .map(validateEndpoint);
+      // Do not pass validateEndpoint directly: Array#map's numeric index would
+      // become its allowInsecureLocalhost argument and silently alter the
+      // security policy per endpoint.
+      .map((value) => validateEndpoint(value));
   }
   const single = process.env.FIDUCIA_E2E_BASE_URL;
   if (single && single.trim()) return [validateEndpoint(single.trim())];
@@ -58,8 +61,67 @@ export function apiKey() {
   return process.env.FIDUCIA_E2E_API_KEY || undefined;
 }
 
+/**
+ * Build authentication options for a client.
+ *
+ * Production/staging tests use a public API key. The three-Kind harness has no
+ * public identity provider, so it may instead emulate the immediately-upstream
+ * trusted edge. That escape hatch is deliberately fail-closed: it requires the
+ * insecure-localhost opt-in, refuses non-loopback origins, and pins injected
+ * identity headers to the configured endpoint so the shared secret cannot be
+ * forwarded to another origin.
+ */
+export function clientOptions(
+  baseUrl,
+  { env = process.env, fetchImpl = globalThis.fetch } = {},
+) {
+  const allowInsecureLocalhost = env.FIDUCIA_E2E_ALLOW_INSECURE_LOCALHOST === "1";
+  const origin = validateEndpoint(baseUrl, allowInsecureLocalhost);
+  const publicApiKey = env.FIDUCIA_E2E_API_KEY || undefined;
+  const edgeSecret = env.FIDUCIA_E2E_LOCAL_EDGE_SECRET || undefined;
+
+  if (publicApiKey && edgeSecret) {
+    throw new Error(
+      "configure either FIDUCIA_E2E_API_KEY or FIDUCIA_E2E_LOCAL_EDGE_SECRET, not both",
+    );
+  }
+  if (!edgeSecret) return { apiKey: publicApiKey };
+
+  const parsed = new URL(origin);
+  const local = ["localhost", "127.0.0.1", "::1"].includes(parsed.hostname);
+  if (!local || !allowInsecureLocalhost) {
+    throw new Error(
+      "FIDUCIA_E2E_LOCAL_EDGE_SECRET is restricted to an explicitly enabled localhost harness",
+    );
+  }
+  if (typeof fetchImpl !== "function") {
+    throw new Error("a fetch implementation is required for local trusted-edge tests");
+  }
+
+  const orgId = env.FIDUCIA_E2E_ORG_ID?.trim();
+  if (!orgId) {
+    throw new Error("FIDUCIA_E2E_ORG_ID is required with FIDUCIA_E2E_LOCAL_EDGE_SECRET");
+  }
+  const scopes = env.FIDUCIA_E2E_SCOPES?.trim() || "admin:read admin:write";
+
+  return {
+    fetch: async (input, init = {}) => {
+      const target = new URL(typeof input === "string" || input instanceof URL ? input : input.url);
+      if (target.origin !== origin) {
+        throw new Error("refusing to forward local trusted-edge identity outside its endpoint origin");
+      }
+      const headers = new Headers(init.headers);
+      headers.set("x-fiducia-edge-auth", edgeSecret);
+      headers.set("x-fiducia-org-id", orgId);
+      headers.set("x-fiducia-scopes", scopes);
+      return fetchImpl(input, { ...init, headers });
+    },
+  };
+}
+
 /** Build a client for a specific endpoint (defaults to primary()). */
 export function makeClient(baseUrl = primary()) {
   if (!baseUrl) throw new Error("no fiducia endpoint configured");
-  return new FiduciaClient(baseUrl, { apiKey: apiKey() });
+  const origin = validateEndpoint(baseUrl);
+  return new FiduciaClient(origin, clientOptions(origin));
 }

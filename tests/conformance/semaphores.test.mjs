@@ -46,6 +46,47 @@ describe("semaphores / counting leases", { skip: NO_ENDPOINT }, () => {
     });
   });
 
+  it("a count-3 semaphore holds exactly 3 concurrent holders — no fewer, no more", async (t) => {
+    const c = makeClient();
+    const key = uniqueKey("sem-three");
+    const limit = 3;
+    const holders = [uniqueId("w1"), uniqueId("w2"), uniqueId("w3")];
+
+    await skipIfUndeployed(t, "POST /v1/semaphores/acquire (limit=3)", async () => {
+      // All three distinct workers must hold permits SIMULTANEOUSLY (no
+      // releases in between) — a semaphore of 3 is three concurrent mutexes'
+      // worth of capacity on one key.
+      const grants = [];
+      for (const holder of holders) {
+        const g = output(await c.semaphoreAcquire(key, { holder, ttlMs: TTL, limit }));
+        assert.equal(g.acquired, true, `${holder} within count=3 must acquire`);
+        grants.push(g);
+      }
+
+      // WRONG BEHAVIOR => FAIL: the 4th concurrent holder must be refused
+      // while all three permits are live.
+      const fourth = output(
+        await c.semaphoreAcquire(key, { holder: uniqueId("w4"), ttlMs: TTL, limit }),
+      );
+      assert.notEqual(fourth.acquired, true, "4th concurrent holder must not exceed count=3");
+
+      // The semaphore's own state confirms 3 live holders at once.
+      const state = output(await c.semaphoreGet(key));
+      const live =
+        state?.holders?.length ?? state?.semaphore?.holders?.length ?? state?.held_count;
+      if (live !== undefined) {
+        assert.equal(Number(live), 3, "exactly 3 permits must be live concurrently");
+      }
+
+      for (let i = 0; i < holders.length; i += 1) {
+        await c.semaphoreRelease(key, {
+          holder: holders[i],
+          fencingToken: grants[i].fencing_token,
+        });
+      }
+    });
+  });
+
   it("each holder gets a distinct fencing token", async (t) => {
     const c = makeClient();
     const key = uniqueKey("sem-tokens");

@@ -286,6 +286,24 @@ export const CUSTOMER = {
   password: "customer-pw",
   app_metadata: { orgs: ["00000000-0000-4000-8000-000000000001"] },
 };
+/**
+ * A customer whose account already carries a verified TOTP authenticator. Login
+ * through the passwordless (OTP) path therefore forces aal1→aal2 step-up: the
+ * primary factor succeeds, but the app parks the interim token in the MFA-pending
+ * cookie and demands the authenticator code before issuing the session cookie.
+ * Same org as CUSTOMER so fiducia-auth admits the finalized session.
+ */
+export const CUSTOMER_MFA = {
+  id: "44444444-4444-4444-8444-444444444444",
+  email: "mfa@acme.com",
+  password: "customer-mfa-pw",
+  app_metadata: { orgs: ["00000000-0000-4000-8000-000000000001"] },
+  factors: [{ factor_type: "totp", status: "verified", friendly_name: "Authy" }],
+};
+/** The fixed one-time / authenticator code the stub Supabase accepts (see stubs.mjs). */
+export const STUB_TOTP_CODE = "123456";
+/** The fixed email/SMS OTP code the stub Supabase accepts (see stubs.mjs). */
+export const STUB_OTP_CODE = "123456";
 export const ORGLESS = {
   id: "33333333-3333-4333-8333-333333333333",
   email: "new-signup@example.com",
