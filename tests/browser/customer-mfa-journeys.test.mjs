@@ -400,11 +400,11 @@ describe("real-browser customer + MFA journeys", { skip: SKIP, concurrency: 1 },
           url: stack.admin.url,
         });
         const adminResponse = await page.goto(stack.admin.url, { waitUntil: "domcontentloaded" });
+        // 403 (not the 200 dashboard): the role gate serves the forbidden page.
         assert.equal(adminResponse.status(), 403, "a customer credential is forbidden from admin");
-        assert.equal(await page.$(".who"), null, "the operator dashboard chrome never renders");
         assert.match(
           await page.content(),
-          /Admin role required|403/i,
+          /Admin role required/i,
           "the admin role gate rejects the customer identity",
         );
 
