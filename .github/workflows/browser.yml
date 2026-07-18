@@ -44,7 +44,7 @@ jobs:
         with:
           persist-credentials: false
           repository: fiducia-cloud/fiducia-test-config
-          ref: 6b6b8f7e2d3c4a5f9e0d1c2b3a4958677889aabb
+          ref: 5f50faedbd887e831044e0017643822472bb12b3
           path: fiducia-test-config
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
