@@ -175,14 +175,12 @@ describe("real-browser customer + MFA journeys", { skip: SKIP, concurrency: 1 },
       const { context, page, close } = await pwPage();
       try {
         await page.goto(customerUrl("/login"), { waitUntil: "domcontentloaded" });
-        // The email magic-link form is the one carrying #magic-email.
+        // Two forms POST to /login/otp (email + phone); the email magic-link form
+        // is the one owning #magic-email. Submit that form specifically.
         await page.fill("#magic-email", CUSTOMER.email);
         await Promise.all([
           page.waitForNavigation({ waitUntil: "domcontentloaded" }),
-          page.click('form[action="/login/otp"] button[type="submit"]:below(#magic-email)').catch(async () => {
-            // Fallback: submit the form owning #magic-email directly.
-            await page.$eval("#magic-email", (el) => el.form.requestSubmit());
-          }),
+          page.$eval("#magic-email", (el) => el.form.requestSubmit()),
         ]);
         await page.waitForSelector('form[action="/login/verify"] input[name="token"]');
         assert.match(await page.content(), /Check your email/i, "the OTP-entry page renders");
