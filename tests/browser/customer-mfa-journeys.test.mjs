@@ -391,20 +391,22 @@ describe("real-browser customer + MFA journeys", { skip: SKIP, concurrency: 1 },
       const { page, close } = await ppPage();
       try {
         // Direction 1: a real customer Supabase session, planted under the admin
-        // cookie name, does not open the admin dashboard.
+        // cookie name, is a VALID identity but not an operator — the admin role
+        // gate serves 403 (Admin role required), never the dashboard.
         const customerToken = await stack.grant(CUSTOMER);
         await page.setCookie({
           name: ADMIN_SESSION_COOKIE,
           value: customerToken,
           url: stack.admin.url,
         });
-        await page.goto(stack.admin.url, { waitUntil: "domcontentloaded" });
+        const adminResponse = await page.goto(stack.admin.url, { waitUntil: "domcontentloaded" });
+        assert.equal(adminResponse.status(), 403, "a customer credential is forbidden from admin");
+        assert.equal(await page.$(".who"), null, "the operator dashboard chrome never renders");
         assert.match(
-          new URL(page.url()).pathname,
-          /\/login$/,
-          "a customer credential is not a valid admin session",
+          await page.content(),
+          /Admin role required|403/i,
+          "the admin role gate rejects the customer identity",
         );
-        assert.equal(await page.$(".who"), null, "the admin dashboard chrome never renders");
 
         // Direction 2: an admin-named cookie carries no authority on the customer
         // plane, which reads only its own session cookie / Bearer.
