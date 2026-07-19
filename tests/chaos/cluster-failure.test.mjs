@@ -167,8 +167,10 @@ describe("chaos / cross-cluster quorum", { skip: MULTI }, () => {
       const killed = await disruptCluster(target);
       try {
         // 3. Confirm the selected cluster endpoint is actually unavailable.
+        //    Probe it PINNED: a failover client would answer from a survivor and
+        //    mask the outage we just caused.
         await assert.rejects(
-          clientFor(eps[targetIndex]).status(),
+          pinnedClientFor(eps[targetIndex]).status(),
           "the disrupted cluster endpoint must become unreachable"
         );
 
