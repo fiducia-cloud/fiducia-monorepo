@@ -10,13 +10,44 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-import { output } from "../../src/client.mjs";
+import { HttpError, output } from "../../src/client.mjs";
 import { makeClient } from "../../src/endpoints.mjs";
-import { NO_ENDPOINT, uniqueKey, uniqueId, skipIfUndeployed } from "../helpers.mjs";
+import {
+  capabilityOrSkip,
+  NO_ENDPOINT,
+  uniqueKey,
+  uniqueId,
+  skipIfUndeployed,
+} from "../helpers.mjs";
 
 const TTL = 30_000;
 
 describe("locks / mutual exclusion", { skip: NO_ENDPOINT }, () => {
+  it("requires an explicit nonempty holder and a positive ttl_ms", async (t) => {
+    const c = makeClient();
+    const key = uniqueKey("locks-validation");
+    const rejectsBadRequest = (promise, label) => assert.rejects(
+      promise,
+      (error) => error instanceof HttpError && error.status === 400,
+      label,
+    );
+
+    await skipIfUndeployed(t, "POST /v1/locks/acquire (required fields)", async () => {
+      await rejectsBadRequest(
+        c.tryLock(key, { ttlMs: TTL }),
+        "missing holder must be rejected rather than collapsed into a shared anonymous holder",
+      );
+      await rejectsBadRequest(
+        c.tryLock(key, { holder: "", ttlMs: TTL }),
+        "empty holder must be rejected",
+      );
+      await rejectsBadRequest(
+        c.tryLock(key, { holder: uniqueId("holder"), ttlMs: 0 }),
+        "ttl_ms=0 must be rejected rather than creating an immediately stale grant",
+      );
+    });
+  });
+
   it("a second try-lock on a held key is refused, release frees it", async (t) => {
     const c = makeClient();
     const key = uniqueKey("locks-mutex");
@@ -118,13 +149,90 @@ describe("locks / mutual exclusion", { skip: NO_ENDPOINT }, () => {
       const t2 = g2.fencing_token;
       await c.lockRelease(key, { holder, fencingToken: t2 });
 
-      if (typeof t1 === "number" && typeof t2 === "number") {
+      if (capabilityOrSkip(
+        t,
+        typeof t1 === "number" && typeof t2 === "number",
+        "endpoint did not return numeric fencing tokens; cannot check monotonicity",
+      )) {
         // Strictly increasing (Kleppmann fencing) — a later grant must fence
         // off the earlier one.
         assert.ok(t2 > t1, `fencing token must be monotonic: ${t2} > ${t1}`);
-      } else {
-        t.skip("endpoint did not return numeric fencing tokens; cannot check monotonicity");
       }
+    });
+  });
+
+  it("explicit same-holder renew preserves its fencing token and extends expiry", async (t) => {
+    const c = makeClient();
+    const key = uniqueKey("locks-renew");
+    const holder = uniqueId("renewing-holder");
+
+    await skipIfUndeployed(t, "POST /v1/locks/renew (token-bound renewal)", async () => {
+      const first = output(await c.tryLock(key, { holder, ttlMs: 5_000 }));
+      assert.equal(first.acquired, true, "initial lock is granted");
+      assert.equal(typeof first.fencing_token, "number", "initial grant has a fencing token");
+      assert.equal(typeof first.lease_expires_ms, "number", "initial grant has an expiry");
+
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      const wrongToken = output(await c.lockRenew(key, {
+        holder,
+        fencingToken: first.fencing_token + 1,
+        ttlMs: 30_000,
+      }));
+      assert.equal(wrongToken.renewed, false, "a non-owner fencing token cannot renew the lock");
+
+      const renewed = output(await c.lockRenew(key, {
+        holder,
+        fencingToken: first.fencing_token,
+        ttlMs: 30_000,
+      }));
+      assert.equal(renewed.renewed, true, "response explicitly reports renewal");
+      assert.equal(
+        renewed.fencing_token,
+        first.fencing_token,
+        "renewal must preserve the original fencing token",
+      );
+      assert.ok(
+        renewed.lease_expires_ms > first.lease_expires_ms,
+        "renewal must extend lease_expires_ms",
+      );
+      await c.lockRelease(key, { holder, fencingToken: first.fencing_token });
+    });
+  });
+
+  it("union renewal requires the exact canonical key set", async (t) => {
+    const c = makeClient();
+    const k1 = uniqueKey("locks-renew-union-a");
+    const k2 = uniqueKey("locks-renew-union-b");
+    const holder = uniqueId("union-renew-holder");
+    const requestId = uniqueId("union-renew-attempt");
+
+    await skipIfUndeployed(t, "POST /v1/locks/renew (exact union)", async () => {
+      const first = output(await c.lockMany({
+        keys: [k2, k1, k1],
+        holder,
+        ttlMs: 5_000,
+        requestId,
+      }));
+      assert.equal(first.acquired, true, "canonical union is initially granted");
+
+      const mismatched = output(await c.lockRenewMany({
+        keys: [k1],
+        holder,
+        fencingToken: first.fencing_token,
+        ttlMs: 30_000,
+      }));
+      assert.equal(mismatched.renewed, false, "a subset cannot renew union authority");
+      assert.equal(mismatched.reason, "key_mismatch", "union mismatch is explicit and exact");
+
+      const correct = output(await c.lockRenewMany({
+        keys: [k1, k2],
+        holder,
+        fencingToken: first.fencing_token,
+        ttlMs: 30_000,
+      }));
+      assert.equal(correct.renewed, true, "the exact canonical union can renew");
+      assert.equal(correct.fencing_token, first.fencing_token, "renewal preserves its fence");
+      await c.lockRelease(k1, { holder, fencingToken: first.fencing_token });
     });
   });
 });

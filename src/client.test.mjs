@@ -12,7 +12,7 @@ function jsonResponse(body, status = 200) {
 
 test("handoff and budget methods preserve their HTTP wire contracts", async () => {
   const calls = [];
-  const client = new FiduciaClient("https://api.example.test/ignored-path", {
+  const client = new FiduciaClient("https://api.example.test/", {
     apiKey: "test-api-key",
     fetch: async (url, init) => {
       calls.push({ url, init });
@@ -76,6 +76,116 @@ test("request preserves a non-JSON HTTP error for conformance diagnostics", asyn
   );
 });
 
+test("lock and semaphore renew/cancel helpers use token-bound wire contracts", async () => {
+  const calls = [];
+  const client = new FiduciaClient("https://api.example.test", {
+    fetch: async (url, init) => {
+      calls.push({ url, init });
+      return jsonResponse({ committed: true });
+    },
+  });
+  await client.lockRenew("deploy/main", {
+    holder: "worker-a",
+    fencingToken: 41,
+    ttlMs: 60_000,
+  });
+  await client.lockRenewMany({
+    keys: ["deploy/main", "migration/main"],
+    holder: "worker-a",
+    fencingToken: 41,
+    ttlMs: 60_000,
+  });
+  await client.lockCancel("deploy/next", { holder: "worker-c", requestId: "lock-attempt-1" });
+  await client.semaphoreRenew("gpu/pool", {
+    holder: "worker-b",
+    fencingToken: 72,
+    ttlMs: 60_000,
+  });
+  await client.semaphoreCancel("gpu/pool", {
+    holder: "worker-d",
+    requestId: "semaphore-attempt-1",
+  });
+
+  assert.deepEqual(calls.map((call) => [call.url, JSON.parse(call.init.body)]), [
+    ["https://api.example.test/v1/locks/renew", {
+      key: "deploy/main", holder: "worker-a", fencing_token: 41, ttl_ms: 60_000,
+    }],
+    ["https://api.example.test/v1/locks/renew", {
+      keys: ["deploy/main", "migration/main"],
+      holder: "worker-a",
+      fencing_token: 41,
+      ttl_ms: 60_000,
+    }],
+    ["https://api.example.test/v1/locks/cancel", {
+      key: "deploy/next", holder: "worker-c", request_id: "lock-attempt-1",
+    }],
+    ["https://api.example.test/v1/semaphores/renew", {
+      key: "gpu/pool", holder: "worker-b", fencing_token: 72, ttl_ms: 60_000,
+    }],
+    ["https://api.example.test/v1/semaphores/cancel", {
+      key: "gpu/pool", holder: "worker-d", request_id: "semaphore-attempt-1",
+    }],
+  ]);
+});
+
+test("lock and semaphore acquire/cancel helpers preserve attempt request IDs", async () => {
+  const calls = [];
+  const client = new FiduciaClient("https://api.example.test", {
+    fetch: async (url, init) => {
+      calls.push([url, JSON.parse(init.body)]);
+      return jsonResponse({ committed: true });
+    },
+  });
+
+  await client.tryLock("deploy/main", {
+    holder: "worker-a",
+    ttlMs: 30_000,
+    requestId: "lock-attempt-a",
+  });
+  await client.lockMany({
+    keys: ["deploy/main", "migration/main"],
+    holder: "worker-b",
+    ttlMs: 30_000,
+    requestId: "lock-attempt-b",
+  });
+  await client.lockCancelMany({
+    keys: ["deploy/main", "migration/main"],
+    holder: "worker-b",
+    requestId: "lock-attempt-b",
+  });
+  await client.semaphoreAcquire("gpu/pool", {
+    holder: "worker-c",
+    ttlMs: 30_000,
+    limit: 2,
+    requestId: "semaphore-attempt-c",
+  });
+
+  assert.deepEqual(calls.map(([url, body]) => [url, body.request_id]), [
+    ["https://api.example.test/v1/locks/acquire", "lock-attempt-a"],
+    ["https://api.example.test/v1/locks/acquire", "lock-attempt-b"],
+    ["https://api.example.test/v1/locks/cancel", "lock-attempt-b"],
+    ["https://api.example.test/v1/semaphores/acquire", "semaphore-attempt-c"],
+  ]);
+});
+
+test("redirect failover is explicit rather than reread from legacy endpoint env", async () => {
+  const calls = [];
+  const client = new FiduciaClient("https://one.example.test", {
+    failoverEndpoints: ["https://one.example.test", "https://two.example.test/"],
+    fetch: async (url) => {
+      calls.push(url);
+      return url.startsWith("https://one.example.test")
+        ? new Response(null, { status: 307 })
+        : jsonResponse({ ok: true });
+    },
+  });
+  assert.deepEqual(await client.health(), { ok: true });
+  assert.deepEqual(calls, [
+    "https://one.example.test/healthz",
+    "https://two.example.test/healthz",
+  ]);
+});
+
 test("kvWatch parses chunked CRLF SSE and carries authorization", async () => {
   // This test pins the LB-fronted header contract (Bearer only). Clear the
   // direct-to-node env so running the suite against a kind tier (which exports
@@ -129,9 +239,16 @@ test("kvWatch parses chunked CRLF SSE and carries authorization", async () => {
   }
 });
 
-test("API keys cannot be configured for an insecure non-local endpoint", () => {
+test("client base and failover endpoints enforce the same HTTPS policy", () => {
   assert.throws(
     () => new FiduciaClient("http://api.example.test", { apiKey: "test-api-key" }),
-    /refusing to send FIDUCIA_E2E_API_KEY over a non-HTTPS endpoint/,
+    /require HTTPS/,
+  );
+  assert.throws(
+    () => new FiduciaClient("https://api.example.test", {
+      apiKey: "test-api-key",
+      failoverEndpoints: ["http://failover.example.test"],
+    }),
+    /require HTTPS/,
   );
 });

@@ -1,17 +1,29 @@
 // Endpoint resolution for the e2e suite.
 //
-// Two run modes (see README):
-//   (a) multi-cluster: FIDUCIA_E2E_ENDPOINTS = comma-separated LB URLs, e.g.
-//       the three lb_endpoint values from fiducia-infra/topology.toml.
-//   (b) single-endpoint smoke: FIDUCIA_E2E_BASE_URL.
+// Three run modes (see README):
+//   (a) strict proof: validated FIDUCIA_E2E_TOPOLOGY_JSON / _FILE.
+//   (b) legacy multi-cluster: comma-separated FIDUCIA_E2E_ENDPOINTS.
+//   (c) single-endpoint smoke: FIDUCIA_E2E_BASE_URL.
 //
 // When NEITHER is set, `endpoints()` returns [] and `primary()` returns null so
 // every suite SKIPS cleanly — `npm test` is safe with nothing deployed.
 
 import { FiduciaClient } from "./client.mjs";
+import { isLoopbackHostname, validateEndpoint } from "./origin.mjs";
+import { loadProofTopology, topologyConfigured } from "./topology.mjs";
+
+export { validateEndpoint } from "./origin.mjs";
 
 /** @returns {string[]} normalized (trailing-slash-stripped) endpoint URLs. */
 export function endpoints() {
+  if (topologyConfigured()) {
+    if (process.env.FIDUCIA_E2E_ENDPOINTS?.trim() || process.env.FIDUCIA_E2E_BASE_URL?.trim()) {
+      throw new Error(
+        "strict/topology runs must not also configure FIDUCIA_E2E_ENDPOINTS or FIDUCIA_E2E_BASE_URL",
+      );
+    }
+    return loadProofTopology({ allowDefault: true }).clusters.map((cluster) => cluster.endpoint);
+  }
   const list = process.env.FIDUCIA_E2E_ENDPOINTS;
   if (list && list.trim()) {
     return list
@@ -26,29 +38,6 @@ export function endpoints() {
   const single = process.env.FIDUCIA_E2E_BASE_URL;
   if (single && single.trim()) return [validateEndpoint(single.trim())];
   return [];
-}
-
-export function validateEndpoint(
-  value,
-  allowInsecureLocalhost = process.env.FIDUCIA_E2E_ALLOW_INSECURE_LOCALHOST === "1",
-) {
-  let url;
-  try {
-    url = new URL(value);
-  } catch {
-    throw new Error(`invalid Fiducia E2E endpoint URL: ${value}`);
-  }
-  if (url.username || url.password || url.search || url.hash) {
-    throw new Error("Fiducia E2E endpoints must not contain userinfo, query, or fragment data");
-  }
-  const local = ["localhost", "127.0.0.1", "::1"].includes(url.hostname);
-  const allowLocalHttp = local && allowInsecureLocalhost;
-  if (url.protocol !== "https:" && !(url.protocol === "http:" && allowLocalHttp)) {
-    throw new Error(
-      "Fiducia E2E endpoints require HTTPS; set FIDUCIA_E2E_ALLOW_INSECURE_LOCALHOST=1 only for a local harness",
-    );
-  }
-  return url.origin;
 }
 
 /** @returns {string|null} the first configured endpoint, or null to skip. */
@@ -85,10 +74,18 @@ export function clientOptions(
       "configure either FIDUCIA_E2E_API_KEY or FIDUCIA_E2E_LOCAL_EDGE_SECRET, not both",
     );
   }
-  if (!edgeSecret) return { apiKey: publicApiKey };
+  if (!edgeSecret) {
+    return {
+      apiKey: publicApiKey,
+      internalSecret: publicApiKey
+        ? undefined
+        : env.FIDUCIA_E2E_INTERNAL_SECRET || undefined,
+      internalOrgId: publicApiKey ? undefined : env.FIDUCIA_E2E_ORG_ID || undefined,
+    };
+  }
 
   const parsed = new URL(origin);
-  const local = ["localhost", "127.0.0.1", "::1"].includes(parsed.hostname);
+  const local = isLoopbackHostname(parsed.hostname);
   if (!local || !allowInsecureLocalhost) {
     throw new Error(
       "FIDUCIA_E2E_LOCAL_EDGE_SECRET is restricted to an explicitly enabled localhost harness",
@@ -123,5 +120,8 @@ export function clientOptions(
 export function makeClient(baseUrl = primary()) {
   if (!baseUrl) throw new Error("no fiducia endpoint configured");
   const origin = validateEndpoint(baseUrl);
-  return new FiduciaClient(origin, clientOptions(origin));
+  return new FiduciaClient(origin, {
+    ...clientOptions(origin),
+    failoverEndpoints: endpoints(),
+  });
 }

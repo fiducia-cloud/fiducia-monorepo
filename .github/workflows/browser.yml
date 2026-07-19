@@ -88,9 +88,19 @@ jobs:
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
             | sh -s -- -y --default-toolchain none --profile minimal
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-      - name: Install locked dependencies (with browser lifecycle scripts)
+      - name: Install locked dependencies without lifecycle scripts
         working-directory: fiducia-e2e
-        run: npm ci
+        run: npm ci --ignore-scripts
+      # Install the browser binaries explicitly instead of via npm postinstall
+      # lifecycle scripts (fleet supply-chain policy: no unvetted install-time
+      # scripts). Playwright drives the operator happy path; Puppeteer (whose
+      # Chrome-for-Testing download is normally a postinstall step, skipped by
+      # --ignore-scripts) drives the separation/negative paths.
+      - name: Install browser binaries (Playwright + Puppeteer Chrome-for-Testing)
+        working-directory: fiducia-e2e
+        run: |
+          npx playwright install chromium
+          npx puppeteer browsers install chrome
       - name: Customer + MFA real-browser journeys
         working-directory: fiducia-e2e
         run: npm run test:browser

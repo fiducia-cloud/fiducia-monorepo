@@ -6,6 +6,8 @@ import { primary } from "../src/endpoints.mjs";
 import { randomUUID } from "node:crypto";
 import assert from "node:assert/strict";
 
+export const STRICT_PROOF = process.env.FIDUCIA_E2E_STRICT_PROOF === "1";
+
 // One explicit high-entropy run namespace. PIDs repeat across CI containers and
 // must not be used to address durable state in a long-lived cluster.
 const configuredRun = process.env.FIDUCIA_E2E_RUN_ID
@@ -41,11 +43,24 @@ export async function skipIfUndeployed(t, label, fn) {
     await fn();
   } catch (err) {
     if (err instanceof HttpError && (err.status === 404 || err.status === 501)) {
+      if (STRICT_PROOF) {
+        throw new Error(`${label}: strict proof requires this route (HTTP ${err.status})`, {
+          cause: err,
+        });
+      }
       t.skip(`${label}: route not deployed on this endpoint (HTTP ${err.status})`);
       return;
     }
     throw err;
   }
+}
+
+/** In strict proof mode an absent response capability is a failure, not a skip. */
+export function capabilityOrSkip(t, condition, message) {
+  if (condition) return true;
+  if (STRICT_PROOF) assert.fail(`strict proof requires capability: ${message}`);
+  t.skip(message);
+  return false;
 }
 
 /** Assert the concrete fiducia-node `/v1/status` contract. */
@@ -55,7 +70,17 @@ export function assertHealthyNodeStatus(status, label = "status") {
   assert.ok(consensus && typeof consensus === "object", `${label}: consensus object`);
   assert.equal(typeof consensus.node_id, "string", `${label}: node_id`);
   assert.ok(Number.isInteger(consensus.shard_count) && consensus.shard_count > 0, `${label}: shard_count`);
-  assert.ok(Array.isArray(consensus.shards) && consensus.shards.length > 0, `${label}: shards`);
+  assert.ok(Array.isArray(consensus.shards), `${label}: shards`);
+  assert.equal(
+    consensus.shards.length,
+    consensus.shard_count,
+    `${label}: status must cover every expected shard exactly once`,
+  );
+  assert.deepEqual(
+    consensus.shards.map((shard) => shard?.shard_id).sort((a, b) => a - b),
+    Array.from({ length: consensus.shard_count }, (_, shardId) => shardId),
+    `${label}: shard IDs must be the complete 0..shard_count-1 set`,
+  );
   for (const shard of consensus.shards) {
     assert.ok(Number.isInteger(shard.shard_id), `${label}: shard_id`);
     assert.ok(["leader", "follower", "candidate"].includes(shard.role), `${label}: role`);

@@ -14,6 +14,19 @@ Standalone maintenance/CI scripts for the suite.
   test-only accounts, then tears every process and temporary database down on
   `SIGINT`/`SIGTERM`. Set `FIDUCIA_REPOS_ROOT` when the sibling checkouts are not
   adjacent to this repository. PostgreSQL command-line tools must be on `PATH`.
+- `prove-hetzner.mjs` — fail-closed operator runner for exactly three
+  infra-attested Hetzner clusters. It refuses defaults, inline topology, and
+  local Kind; rehashes fiducia-infra's exact topology/evidence siblings; checks
+  their clean source/release, exact runtime workload images, and distinct
+  `hcloud://` placement; supports regional k3s and co-located vcluster
+  topologies; confirms distinct Kubernetes cluster UIDs and Fiducia member IDs,
+  polls the three pinned node endpoints until every shard has exact RF=3
+  membership/leader/term/commit convergence, records API server and visible
+  physical node/provider placement plus source/image/status identity, runs smoke + lock + lease +
+  semaphore + cross-endpoint tests, and writes mode-`0600` sanitized JSON/TAP
+  evidence beneath ignored `evidence/`. It refuses legacy endpoint variables
+  and a dirty proof-source tree. Cluster outage/rejoin mutation is double gated
+  by `FIDUCIA_E2E_ALLOW_DISRUPTIVE=1` and `--chaos`.
 
 Scripts here are tooling around the tests, not part of the client or the specs
 themselves.

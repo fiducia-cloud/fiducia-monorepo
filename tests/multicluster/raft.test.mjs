@@ -1,4 +1,4 @@
-// The real local three-cloud approximation: separate Kind control planes,
+// The real three-Hetzner-region approximation: separate Kind control planes,
 // cross-cluster node Raft, cross-cluster brain Raft, and one LB per cluster.
 
 import { spawn } from "node:child_process";
@@ -12,6 +12,7 @@ import assert from "node:assert/strict";
 import { setTimeout as delay } from "node:timers/promises";
 
 import { FiduciaClient, output } from "../../src/client.mjs";
+import { loadProofTopology } from "../../src/topology.mjs";
 import { uniqueKey } from "../helpers.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -25,11 +26,25 @@ const REPOS_ROOT = process.env.FIDUCIA_REPOS_ROOT
 const PARTITION = join(REPOS_ROOT, "fiducia-infra", "kind", "multicluster", "partition.sh");
 const NETEM = join(REPOS_ROOT, "fiducia-infra", "kind", "multicluster", "netem.sh");
 
-const clusters = [
-  { name: "hetzner", context: "kind-fiducia-hetzner", nodeUrl: "http://127.0.0.1:8090", lbUrl: "http://127.0.0.1:8093" },
-  { name: "vultr", context: "kind-fiducia-vultr", nodeUrl: "http://127.0.0.1:8091", lbUrl: "http://127.0.0.1:8094" },
-  { name: "civo", context: "kind-fiducia-civo", nodeUrl: "http://127.0.0.1:8092", lbUrl: "http://127.0.0.1:8095" },
-];
+const topology = ENABLED
+  ? loadProofTopology({ allowDefault: true })
+  : { namespace: "fiducia", clusters: [] };
+const clusters = topology.clusters.map((cluster) => ({
+  name: cluster.clusterId,
+  region: cluster.region,
+  context: cluster.kubeContext,
+  kubeconfig: cluster.kubeconfig,
+  nodeUrl: cluster.nodeEndpoint,
+  lbUrl: cluster.endpoint,
+}));
+
+function kubeConnectionArgs(cluster) {
+  return [
+    ...(cluster.kubeconfig ? ["--kubeconfig", cluster.kubeconfig] : []),
+    "--context",
+    cluster.context,
+  ];
+}
 
 async function eventually(fn, { timeoutMs = 90_000, intervalMs = 1_000, label = "condition" } = {}) {
   const deadline = Date.now() + timeoutMs;
@@ -61,7 +76,7 @@ async function startForward(cluster, resource, remotePort, label) {
   let logs = "";
   const child = spawn(
     process.env.FIDUCIA_E2E_KUBECTL || "kubectl",
-    ["--context", cluster.context, "--namespace", "fiducia", "port-forward", resource, `${port}:${remotePort}`],
+    [...kubeConnectionArgs(cluster), "--namespace", topology.namespace, "port-forward", resource, `${port}:${remotePort}`],
     { detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"] },
   );
   const append = (chunk) => { logs = (logs + String(chunk)).slice(-8192); };
@@ -134,7 +149,27 @@ function leadersByShard(statuses) {
 }
 
 function assertHealthyShardQuorums(statuses, label) {
+  assert.ok(statuses.length > 0, `${label}: at least one status is required`);
   const shardCount = statuses[0].consensus.shard_count;
+  assert.ok(Number.isInteger(shardCount) && shardCount > 0, `${label}: positive shard count`);
+  const expectedShardIds = Array.from({ length: shardCount }, (_, shardId) => shardId);
+  for (const [index, status] of statuses.entries()) {
+    assert.equal(
+      status.consensus.shard_count,
+      shardCount,
+      `${label}: member ${index} agrees on shard_count`,
+    );
+    assert.equal(
+      status.consensus.shards.length,
+      shardCount,
+      `${label}: member ${index} reports every expected shard`,
+    );
+    assert.deepEqual(
+      status.consensus.shards.map((shard) => shard.shard_id).sort((a, b) => a - b),
+      expectedShardIds,
+      `${label}: member ${index} reports the complete shard ID set`,
+    );
+  }
   const leaders = leadersByShard(statuses);
   assert.equal(leaders.size, shardCount, `${label}: every shard has a leader`);
   for (let shardId = 0; shardId < shardCount; shardId += 1) {
@@ -155,7 +190,7 @@ function assertHealthyShardQuorums(statuses, label) {
 async function kubectl(cluster, args, options = {}) {
   return execFileAsync(
     process.env.FIDUCIA_E2E_KUBECTL || "kubectl",
-    ["--context", cluster.context, "--namespace", "fiducia", ...args],
+    [...kubeConnectionArgs(cluster), "--namespace", topology.namespace, ...args],
     { timeout: 120_000, maxBuffer: 4 * 1024 * 1024, ...options },
   );
 }
@@ -173,16 +208,7 @@ describe("Kind x3: cross-cluster node + brain Raft", { skip: SKIP, concurrency: 
 
   it("elects exactly one healthy node leader per shard and all replicas agree", async () => {
     await eventually(async () => {
-      const statuses = await nodeStatuses();
-      const shardCount = statuses[0].consensus.shard_count;
-      const leaders = leadersByShard(statuses);
-      assert.equal(leaders.size, shardCount, "every shard has a leader");
-      for (let shardId = 0; shardId < shardCount; shardId += 1) {
-        assert.equal(leaders.get(shardId)?.length, 1, `shard ${shardId} has exactly one leader`);
-        const replicas = statuses.map((status) => status.consensus.shards.find((shard) => shard.shard_id === shardId));
-        assert.equal(new Set(replicas.map((shard) => shard.leader_id)).size, 1, `shard ${shardId} leader agreement`);
-        assert.ok(replicas.find((shard) => shard.role === "leader")?.healthy_replicas >= 2, `shard ${shardId} holds quorum`);
-      }
+      assertHealthyShardQuorums(await nodeStatuses(), "node Raft convergence");
     }, { label: "node Raft convergence" });
   });
 
@@ -220,7 +246,7 @@ describe("Kind x3: cross-cluster node + brain Raft", { skip: SKIP, concurrency: 
     for (const cluster of clusters) {
       const { stdout } = await execFileAsync(
         process.env.FIDUCIA_E2E_KUBECTL || "kubectl",
-        ["--context", cluster.context, "--namespace", "fiducia", "get", "statefulset", "fiducia-node", "fiducia-brain", "--output", "json"],
+        [...kubeConnectionArgs(cluster), "--namespace", topology.namespace, "get", "statefulset", "fiducia-node", "fiducia-brain", "--output", "json"],
         { timeout: 30_000, maxBuffer: 4 * 1024 * 1024 },
       );
       const workloads = JSON.parse(stdout).items;
@@ -237,7 +263,7 @@ describe("Kind x3: cross-cluster node + brain Raft", { skip: SKIP, concurrency: 
     for (const cluster of clusters) {
       const { stdout } = await execFileAsync(
         process.env.FIDUCIA_E2E_KUBECTL || "kubectl",
-        ["--context", cluster.context, "--namespace", "fiducia", "get", "statefulset", "fiducia-node", "fiducia-brain", "--output", "json"],
+        [...kubeConnectionArgs(cluster), "--namespace", topology.namespace, "get", "statefulset", "fiducia-node", "fiducia-brain", "--output", "json"],
         { timeout: 30_000, maxBuffer: 4 * 1024 * 1024 },
       );
       const workloads = Object.fromEntries(
@@ -353,7 +379,7 @@ describe("Kind x3: cross-cluster node + brain Raft", { skip: SKIP, concurrency: 
     skip: process.env.FIDUCIA_E2E_ALLOW_DISRUPTIVE !== "1",
     timeout: 180_000,
   }, async () => {
-    await execFileAsync(PARTITION, ["directed", "hetzner", "vultr"], { timeout: 30_000 });
+    await execFileAsync(PARTITION, ["directed", clusters[0].name, clusters[1].name], { timeout: 30_000 });
     try {
       await eventually(async () => {
         assertHealthyShardQuorums(await nodeStatuses(), "directed partition");
@@ -398,11 +424,12 @@ describe("Kind x3: cross-cluster node + brain Raft", { skip: SKIP, concurrency: 
     }
     assert.ok(permits.every((permit) => permit.acquired === true), "three permits commit before isolation");
 
-    await execFileAsync(PARTITION, ["isolate", "civo"], { timeout: 30_000 });
+    const isolated = clusters[2];
+    await execFileAsync(PARTITION, ["isolate", isolated.name], { timeout: 30_000 });
     try {
       await eventually(async () => {
         const statuses = await nodeStatuses();
-        assertHealthyShardQuorums(statuses.slice(0, 2), "civo isolated survivor quorum");
+        assertHealthyShardQuorums(statuses.slice(0, 2), `${isolated.name} isolated survivor quorum`);
         const isolatedQuorumLeaders = statuses[2].consensus.shards
           .filter((shard) => shard.role === "leader" && shard.has_quorum);
         assert.equal(isolatedQuorumLeaders.length, 0, "isolated region has no write authority");

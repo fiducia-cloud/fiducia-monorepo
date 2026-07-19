@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "provider": "hetzner",
+  "isolationMode": "logical",
+  "namespace": "fiducia",
+  "clusters": [
+    {
+      "clusterId": "hetzner-vcluster-a",
+      "region": "fsn1",
+      "kubernetesDistribution": "vcluster",
+      "kubeContext": "fiducia-vcluster-a",
+      "nodeEndpoint": "https://node-a.example.invalid",
+      "endpoint": "https://fiducia-a.example.invalid"
+    },
+    {
+      "clusterId": "hetzner-vcluster-b",
+      "region": "fsn1",
+      "kubernetesDistribution": "vcluster",
+      "kubeContext": "fiducia-vcluster-b",
+      "nodeEndpoint": "https://node-b.example.invalid",
+      "endpoint": "https://fiducia-b.example.invalid"
+    },
+    {
+      "clusterId": "hetzner-vcluster-c",
+      "region": "fsn1",
+      "kubernetesDistribution": "vcluster",
+      "kubeContext": "fiducia-vcluster-c",
+      "nodeEndpoint": "https://node-c.example.invalid",
+      "endpoint": "https://fiducia-c.example.invalid"
+    }
+  ]
+}
