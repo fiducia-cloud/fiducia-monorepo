@@ -40,6 +40,19 @@ function clientFor(url) {
   return makeClient(url);
 }
 
+/**
+ * A client PINNED to one endpoint, with failover deliberately disabled.
+ *
+ * `makeClient` attaches `failoverEndpoints` (every configured endpoint) so
+ * normal traffic survives a NotLeader hint or a dead region — correct for the
+ * data-path assertions here. It is wrong for probing whether ONE endpoint is
+ * down: a failover client answers from a survivor and reports the disrupted
+ * region as healthy, so "this endpoint is unreachable" could never fail.
+ */
+function pinnedClientFor(url) {
+  return new FiduciaClient(url, clientOptions(url));
+}
+
 async function eventually(fn, { timeoutMs = 120_000, intervalMs = 1_000 } = {}) {
   const deadline = Date.now() + timeoutMs;
   let lastError;
