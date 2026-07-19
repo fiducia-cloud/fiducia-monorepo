@@ -190,7 +190,9 @@ describe("chaos / cross-cluster quorum", { skip: MULTI }, () => {
         // Always restore the original replica counts, even when an assertion fails.
         await healCluster(target, killed.provider);
         await eventually(async () => {
-          const healed = await clientFor(eps[targetIndex]).status();
+          // Pinned again: failover would report a survivor's health and let the
+          // rejoin assertion pass while the restarted region was still absent.
+          const healed = await pinnedClientFor(eps[targetIndex]).status();
           assertHealthyNodeStatus(healed, `rejoined ${target}`);
         });
         await survivor.lockRelease(key, { holder, fencingToken: token }).catch(() => {});
