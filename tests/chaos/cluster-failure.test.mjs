@@ -19,8 +19,8 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-import { output } from "../../src/client.mjs";
-import { endpoints, makeClient } from "../../src/endpoints.mjs";
+import { FiduciaClient, output } from "../../src/client.mjs";
+import { clientOptions, endpoints, makeClient } from "../../src/endpoints.mjs";
 import { loadProofTopology, topologyConfigured } from "../../src/topology.mjs";
 import { assertHealthyNodeStatus, uniqueKey, uniqueId, skipIfUndeployed } from "../helpers.mjs";
 import {
@@ -38,6 +38,19 @@ const configuredTopology = topologyConfigured()
 
 function clientFor(url) {
   return makeClient(url);
+}
+
+/**
+ * A client PINNED to one endpoint, with failover deliberately disabled.
+ *
+ * `makeClient` attaches `failoverEndpoints` (every configured endpoint) so
+ * normal traffic survives a NotLeader hint or a dead region — correct for the
+ * data-path assertions here. It is wrong for probing whether ONE endpoint is
+ * down: a failover client answers from a survivor and reports the disrupted
+ * region as healthy, so "this endpoint is unreachable" could never fail.
+ */
+function pinnedClientFor(url) {
+  return new FiduciaClient(url, clientOptions(url));
 }
 
 async function eventually(fn, { timeoutMs = 120_000, intervalMs = 1_000 } = {}) {
@@ -154,8 +167,10 @@ describe("chaos / cross-cluster quorum", { skip: MULTI }, () => {
       const killed = await disruptCluster(target);
       try {
         // 3. Confirm the selected cluster endpoint is actually unavailable.
+        //    Probe it PINNED: a failover client would answer from a survivor and
+        //    mask the outage we just caused.
         await assert.rejects(
-          clientFor(eps[targetIndex]).status(),
+          pinnedClientFor(eps[targetIndex]).status(),
           "the disrupted cluster endpoint must become unreachable"
         );
 
@@ -175,7 +190,9 @@ describe("chaos / cross-cluster quorum", { skip: MULTI }, () => {
         // Always restore the original replica counts, even when an assertion fails.
         await healCluster(target, killed.provider);
         await eventually(async () => {
-          const healed = await clientFor(eps[targetIndex]).status();
+          // Pinned again: failover would report a survivor's health and let the
+          // rejoin assertion pass while the restarted region was still absent.
+          const healed = await pinnedClientFor(eps[targetIndex]).status();
           assertHealthyNodeStatus(healed, `rejoined ${target}`);
         });
         await survivor.lockRelease(key, { holder, fencingToken: token }).catch(() => {});
