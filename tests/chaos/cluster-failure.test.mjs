@@ -19,8 +19,8 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-import { output } from "../../src/client.mjs";
-import { endpoints, makeClient } from "../../src/endpoints.mjs";
+import { FiduciaClient, output } from "../../src/client.mjs";
+import { clientOptions, endpoints, makeClient } from "../../src/endpoints.mjs";
 import { loadProofTopology, topologyConfigured } from "../../src/topology.mjs";
 import { assertHealthyNodeStatus, uniqueKey, uniqueId, skipIfUndeployed } from "../helpers.mjs";
 import {
