@@ -15,6 +15,8 @@
 //     primitive payload (acquired, fencing_token, status, ...).
 //   - undefined body fields are dropped by JSON.stringify (matches the TS SDK).
 
+import { isLoopbackHostname, validateEndpoint } from "./origin.mjs";
+
 const enc = encodeURIComponent;
 
 /** Thrown for any non-2xx HTTP response. `status` lets tests treat 404
@@ -41,19 +43,29 @@ export function output(res) {
 
 export class FiduciaClient {
   /**
-   * @param {string} baseUrl  e.g. https://gcp.lb.fiducia.cloud
-   * @param {{ apiKey?: string, fetch?: typeof fetch }} [opts]
-   */
+   * @param {string} baseUrl  e.g. https://api.fiducia.cloud
+   * @param {{ apiKey?: string, internalSecret?: string, internalOrgId?: string,
+   *   fetch?: typeof fetch, failoverEndpoints?: string[] }} [opts]
+  */
   constructor(baseUrl, opts = {}) {
-    const parsed = new URL(String(baseUrl));
-    const local = ["localhost", "127.0.0.1", "::1"].includes(parsed.hostname);
+    const base = validateEndpoint(String(baseUrl));
+    const parsed = new URL(base);
+    const local = isLoopbackHostname(parsed.hostname);
     const allowLocalHttp = local && process.env.FIDUCIA_E2E_ALLOW_INSECURE_LOCALHOST === "1";
     if (opts.apiKey && parsed.protocol !== "https:" && !allowLocalHttp) {
       throw new Error("refusing to send FIDUCIA_E2E_API_KEY over a non-HTTPS endpoint");
     }
-    this.base = parsed.origin;
+    if (opts.apiKey && opts.internalSecret) {
+      throw new Error("public API and internal-hop credentials are mutually exclusive");
+    }
+    this.base = base;
     this.apiKey = opts.apiKey;
+    this.internalSecret = opts.internalSecret;
+    this.internalOrgId = opts.internalOrgId || "fiducia-e2e";
     this.fetchImpl = opts.fetch ?? globalThis.fetch;
+    this.failoverEndpoints = [...new Set((opts.failoverEndpoints ?? [])
+      .map((endpoint) => validateEndpoint(endpoint))
+      .filter((origin) => origin !== this.base))];
   }
 
   async request(method, path, body) {
@@ -63,10 +75,9 @@ export class FiduciaClient {
     // Direct-to-node runs (kind tiers) speak the trusted-hop contract the LB
     // normally injects: the internal secret plus an org scope. Env-driven and
     // off by default so LB-fronted runs are untouched.
-    const internal = process.env.FIDUCIA_E2E_INTERNAL_SECRET;
-    if (internal) {
-      headers["x-fiducia-internal-auth"] = internal;
-      headers["x-fiducia-org-id"] = process.env.FIDUCIA_E2E_ORG_ID || "fiducia-e2e";
+    if (this.internalSecret) {
+      headers["x-fiducia-internal-auth"] = this.internalSecret;
+      headers["x-fiducia-org-id"] = this.internalOrgId;
     }
     // Leader failover for direct-to-node runs: a follower answers NotLeader as
     // a 307 whose Location is the leader's cross-cluster address — often
@@ -75,12 +86,7 @@ export class FiduciaClient {
     // (bounded), which is exactly the SDK's documented failover behavior.
     const bases = [
       this.base,
-      ...(process.env.FIDUCIA_E2E_ENDPOINTS || "")
-        .split(",")
-        .map((endpoint) => endpoint.trim())
-        .filter(Boolean)
-        .map((endpoint) => new URL(endpoint).origin)
-        .filter((origin) => origin !== this.base),
+      ...this.failoverEndpoints,
     ];
     let res;
     for (const base of bases) {
@@ -119,12 +125,50 @@ export class FiduciaClient {
     return this.request("GET", `/v1/locks?key=${enc(key)}`);
   }
   // wait:false = try-lock (PROTOCOL.md "Locks").
-  tryLock(key, { holder, ttlMs, wait = false } = {}) {
-    return this.request("POST", "/v1/locks/acquire", { key, holder, ttl_ms: ttlMs, wait });
+  tryLock(key, { holder, ttlMs, wait = false, waitTimeoutMs, requestId } = {}) {
+    return this.request("POST", "/v1/locks/acquire", {
+      key,
+      holder,
+      ttl_ms: ttlMs,
+      wait,
+      wait_timeout_ms: waitTimeoutMs,
+      request_id: requestId,
+    });
   }
   // Multi-key union lock: all-or-nothing over the deduped key set.
-  lockMany({ keys, holder, ttlMs, wait = false }) {
-    return this.request("POST", "/v1/locks/acquire", { keys, holder, ttl_ms: ttlMs, wait });
+  lockMany({ keys, holder, ttlMs, wait = false, waitTimeoutMs, requestId }) {
+    return this.request("POST", "/v1/locks/acquire", {
+      keys,
+      holder,
+      ttl_ms: ttlMs,
+      wait,
+      wait_timeout_ms: waitTimeoutMs,
+      request_id: requestId,
+    });
+  }
+  // Renewal is token-bound and requires the exact canonical key set. It
+  // preserves the fencing token and extends lease_expires_ms.
+  lockRenew(key, { holder, fencingToken, ttlMs }) {
+    return this.request("POST", "/v1/locks/renew", {
+      key,
+      holder,
+      fencing_token: fencingToken,
+      ttl_ms: ttlMs,
+    });
+  }
+  lockRenewMany({ keys, holder, fencingToken, ttlMs }) {
+    return this.request("POST", "/v1/locks/renew", {
+      keys,
+      holder,
+      fencing_token: fencingToken,
+      ttl_ms: ttlMs,
+    });
+  }
+  lockCancel(key, { holder, requestId }) {
+    return this.request("POST", "/v1/locks/cancel", { key, holder, request_id: requestId });
+  }
+  lockCancelMany({ keys, holder, requestId }) {
+    return this.request("POST", "/v1/locks/cancel", { keys, holder, request_id: requestId });
   }
   lockRelease(_key, { holder, fencingToken }) {
     // Union locks release by {holder, fencing_token}; the key is not sent.
@@ -135,13 +179,37 @@ export class FiduciaClient {
   semaphoreGet(key) {
     return this.request("GET", `/v1/semaphores?key=${enc(key)}`);
   }
-  semaphoreAcquire(key, { holder, ttlMs, limit, wait = false } = {}) {
+  semaphoreAcquire(key, {
+    holder,
+    ttlMs,
+    limit,
+    wait = false,
+    waitTimeoutMs,
+    requestId,
+  } = {}) {
     return this.request("POST", "/v1/semaphores/acquire", {
       key,
       holder,
       ttl_ms: ttlMs,
       limit,
       wait,
+      wait_timeout_ms: waitTimeoutMs,
+      request_id: requestId,
+    });
+  }
+  semaphoreRenew(key, { holder, fencingToken, ttlMs }) {
+    return this.request("POST", "/v1/semaphores/renew", {
+      key,
+      holder,
+      fencing_token: fencingToken,
+      ttl_ms: ttlMs,
+    });
+  }
+  semaphoreCancel(key, { holder, requestId }) {
+    return this.request("POST", "/v1/semaphores/cancel", {
+      key,
+      holder,
+      request_id: requestId,
     });
   }
   semaphoreRelease(key, { holder, fencingToken }) {

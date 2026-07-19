@@ -1,32 +1,36 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
+import { loadProofTopology } from "../../src/topology.mjs";
+
 const execFileAsync = promisify(execFile);
 const disruptions = new Map();
 
 function targetConfig(name) {
-  let contexts;
-  try {
-    contexts = JSON.parse(process.env.FIDUCIA_E2E_CHAOS_CONTEXTS ?? "{}");
-  } catch (error) {
-    throw new Error(`FIDUCIA_E2E_CHAOS_CONTEXTS must be JSON: ${error.message}`);
+  const topology = loadProofTopology({ allowDefault: false });
+  if (!topology) {
+    throw new Error("kubectl chaos requires an explicit validated topology");
   }
-  const context = contexts[name];
-  if (typeof context !== "string" || context.trim() === "") {
-    throw new Error(`no kubectl context mapped for chaos target ${name}`);
-  }
+  const cluster = topology.clusters.find((candidate) => candidate.clusterId === name);
+  if (!cluster) throw new Error(`chaos target ${name} is not present in the validated topology`);
   return {
-    context,
-    namespace: process.env.FIDUCIA_E2E_CHAOS_NAMESPACE || "fiducia",
+    context: cluster.kubeContext,
+    kubeconfig: cluster.kubeconfig,
+    namespace: topology.namespace,
     selector:
       process.env.FIDUCIA_E2E_CHAOS_SELECTOR || "app.kubernetes.io/name=fiducia-node"
   };
 }
 
 async function kubectl(config, args) {
+  const connection = [
+    ...(config.kubeconfig ? ["--kubeconfig", config.kubeconfig] : []),
+    "--context",
+    config.context,
+  ];
   const { stdout } = await execFileAsync(
     process.env.FIDUCIA_E2E_KUBECTL || "kubectl",
-    ["--context", config.context, "--namespace", config.namespace, ...args],
+    [...connection, "--namespace", config.namespace, ...args],
     { timeout: 120_000, maxBuffer: 4 * 1024 * 1024 }
   );
   return stdout;

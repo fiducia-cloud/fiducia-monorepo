@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "provider": "local-mock",
+  "isolationMode": "logical",
+  "namespace": "fiducia",
+  "clusters": [
+    {
+      "clusterId": "hetzner-fsn1",
+      "region": "fsn1",
+      "kubernetesDistribution": "kind",
+      "kubeContext": "kind-fiducia-hetzner-fsn1",
+      "nodeEndpoint": "http://127.0.0.1:8100",
+      "endpoint": "http://127.0.0.1:8103"
+    },
+    {
+      "clusterId": "hetzner-nbg1",
+      "region": "nbg1",
+      "kubernetesDistribution": "kind",
+      "kubeContext": "kind-fiducia-hetzner-nbg1",
+      "nodeEndpoint": "http://127.0.0.1:8101",
+      "endpoint": "http://127.0.0.1:8104"
+    },
+    {
+      "clusterId": "hetzner-hel1",
+      "region": "hel1",
+      "kubernetesDistribution": "kind",
+      "kubeContext": "kind-fiducia-hetzner-hel1",
+      "nodeEndpoint": "http://127.0.0.1:8102",
+      "endpoint": "http://127.0.0.1:8105"
+    }
+  ]
+}

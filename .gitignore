@@ -3,6 +3,7 @@ generated/
 *.log
 .DS_Store
 coverage/
+evidence/
 
 # --- hardened baseline (auto) ---
 Thumbs.db

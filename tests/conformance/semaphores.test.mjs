@@ -10,13 +10,43 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-import { output } from "../../src/client.mjs";
+import { HttpError, output } from "../../src/client.mjs";
 import { makeClient } from "../../src/endpoints.mjs";
-import { NO_ENDPOINT, uniqueKey, uniqueId, skipIfUndeployed } from "../helpers.mjs";
+import {
+  capabilityOrSkip,
+  NO_ENDPOINT,
+  uniqueKey,
+  uniqueId,
+  skipIfUndeployed,
+} from "../helpers.mjs";
 
 const TTL = 30_000;
 
 describe("semaphores / counting leases", { skip: NO_ENDPOINT }, () => {
+  it("requires an explicit nonempty holder and a positive ttl_ms", async (t) => {
+    const c = makeClient();
+    const key = uniqueKey("sem-validation");
+    const rejectsBadRequest = (promise, label) => assert.rejects(
+      promise,
+      (error) => error instanceof HttpError && error.status === 400,
+      label,
+    );
+    await skipIfUndeployed(t, "POST /v1/semaphores/acquire (required fields)", async () => {
+      await rejectsBadRequest(
+        c.semaphoreAcquire(key, { ttlMs: TTL, limit: 1 }),
+        "missing holder must be rejected",
+      );
+      await rejectsBadRequest(
+        c.semaphoreAcquire(key, { holder: "", ttlMs: TTL, limit: 1 }),
+        "empty holder must be rejected",
+      );
+      await rejectsBadRequest(
+        c.semaphoreAcquire(key, { holder: uniqueId("holder"), ttlMs: 0, limit: 1 }),
+        "ttl_ms=0 must be rejected",
+      );
+    });
+  });
+
   it("admits up to `limit` holders, refuses limit+1, release admits the next", async (t) => {
     const c = makeClient();
     const key = uniqueKey("sem");
@@ -43,6 +73,40 @@ describe("semaphores / counting leases", { skip: NO_ENDPOINT }, () => {
 
       await c.semaphoreRelease(key, { holder: h2, fencingToken: a2.fencing_token });
       await c.semaphoreRelease(key, { holder: h3, fencingToken: a3b.fencing_token });
+    });
+  });
+
+  it("treats the initial limit as immutable and reports exact limit_mismatch", async (t) => {
+    const c = makeClient();
+    const key = uniqueKey("sem-immutable-limit");
+    const firstHolder = uniqueId("limit-owner");
+    const secondHolder = uniqueId("limit-contender");
+
+    await skipIfUndeployed(t, "POST /v1/semaphores/acquire (immutable limit)", async () => {
+      const first = output(await c.semaphoreAcquire(key, {
+        holder: firstHolder,
+        ttlMs: TTL,
+        limit: 1,
+        requestId: uniqueId("limit-owner-attempt"),
+      }));
+      assert.equal(first.acquired, true, "first acquisition fixes the semaphore limit");
+
+      const mismatch = output(await c.semaphoreAcquire(key, {
+        holder: secondHolder,
+        ttlMs: TTL,
+        limit: 2,
+        requestId: uniqueId("limit-mismatch-attempt"),
+      }));
+      assert.equal(mismatch.acquired, false, "a later caller cannot silently raise capacity");
+      assert.equal(mismatch.queued, false, "a mismatched limit is not a valid waiter");
+      assert.equal(mismatch.reason, "limit_mismatch", "capacity mismatch is explicit");
+      assert.equal(mismatch.limit, 1, "response preserves the authoritative limit");
+      assert.equal(mismatch.requested_limit, 2, "response reports the rejected limit");
+
+      await c.semaphoreRelease(key, {
+        holder: firstHolder,
+        fencingToken: first.fencing_token,
+      });
     });
   });
 
@@ -99,13 +163,50 @@ describe("semaphores / counting leases", { skip: NO_ENDPOINT }, () => {
       const a2 = output(await c.semaphoreAcquire(key, { holder: h2, ttlMs: TTL, limit }));
       assert.equal(a1.acquired, true);
       assert.equal(a2.acquired, true);
-      if (typeof a1.fencing_token === "number" && typeof a2.fencing_token === "number") {
+      if (capabilityOrSkip(
+        t,
+        typeof a1.fencing_token === "number" && typeof a2.fencing_token === "number",
+        "endpoint did not return numeric fencing tokens",
+      )) {
         assert.notEqual(a1.fencing_token, a2.fencing_token, "concurrent holders need distinct tokens");
-      } else {
-        t.skip("endpoint did not return numeric fencing tokens");
       }
       await c.semaphoreRelease(key, { holder: h1, fencingToken: a1.fencing_token });
       await c.semaphoreRelease(key, { holder: h2, fencingToken: a2.fencing_token });
+    });
+  });
+
+  it("explicit same-holder renew preserves its permit token and extends expiry", async (t) => {
+    const c = makeClient();
+    const key = uniqueKey("sem-renew");
+    const holder = uniqueId("renewing-holder");
+
+    await skipIfUndeployed(t, "POST /v1/semaphores/renew (token-bound renewal)", async () => {
+      const first = output(await c.semaphoreAcquire(key, {
+        holder,
+        ttlMs: 5_000,
+        limit: 1,
+      }));
+      assert.equal(first.acquired, true, "initial permit is granted");
+      assert.equal(typeof first.fencing_token, "number", "initial permit has a fencing token");
+      assert.equal(typeof first.lease_expires_ms, "number", "initial permit has an expiry");
+
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      const renewed = output(await c.semaphoreRenew(key, {
+        holder,
+        fencingToken: first.fencing_token,
+        ttlMs: 30_000,
+      }));
+      assert.equal(renewed.renewed, true, "response explicitly reports renewal");
+      assert.equal(
+        renewed.fencing_token,
+        first.fencing_token,
+        "renewal must preserve the permit fencing token",
+      );
+      assert.ok(
+        renewed.lease_expires_ms > first.lease_expires_ms,
+        "renewal must extend lease_expires_ms",
+      );
+      await c.semaphoreRelease(key, { holder, fencingToken: first.fencing_token });
     });
   });
 });

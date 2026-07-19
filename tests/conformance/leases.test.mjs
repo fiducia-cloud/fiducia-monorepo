@@ -68,6 +68,13 @@ describe("ttl leases", { skip: NO_ENDPOINT }, () => {
         "the reclaimed grant must carry a HIGHER fencing token than the dead holder's " +
           `(${inherited.fencing_token} vs ${deadToken}) so downstream systems can fence the zombie`,
       );
+      const stale = output(await c.lockRelease(key, {
+        holder: dead,
+        fencingToken: deadToken,
+      }));
+      assert.equal(stale.released, false, "the expired holder's stale release must be rejected");
+      const afterStale = (await c.lockGet(key))?.lock;
+      assert.equal(afterStale?.holder, heir, "stale release must not evict the higher-token heir");
       await c.lockRelease(key, { holder: heir, fencingToken: inherited.fencing_token });
     });
   });
@@ -105,6 +112,198 @@ describe("ttl leases", { skip: NO_ENDPOINT }, () => {
 
       await c.semaphoreRelease(key, { holder: live, fencingToken: g2.fencing_token });
       await c.semaphoreRelease(key, { holder: heir, fencingToken: readmitted.fencing_token });
+    });
+  });
+
+  it("a queued successor progresses after dead-holder expiry by re-POSTing acquire", async (t) => {
+    const c = makeClient();
+    const key = uniqueKey("lease-queued-repost");
+    const dead = uniqueId("dead-holder");
+    const successor = uniqueId("queued-successor");
+    const successorRequestId = uniqueId("queued-successor-attempt");
+
+    await skipIfUndeployed(t, "POST /v1/locks/acquire (queued expiry progress)", async () => {
+      const first = output(await c.tryLock(key, { holder: dead, ttlMs: SHORT_TTL }));
+      assert.equal(first.acquired, true, "dead holder acquires first");
+      const queued = output(await c.tryLock(key, {
+        holder: successor,
+        ttlMs: 30_000,
+        wait: true,
+        requestId: successorRequestId,
+      }));
+      assert.equal(queued.acquired, false, "successor cannot overlap the live holder");
+      assert.equal(queued.queued, true, "successor reserves a FIFO queue position");
+
+      await sleep(SHORT_TTL + 300);
+      const promoted = output(
+        await acquireEventually(async () => output(await c.tryLock(key, {
+          holder: successor,
+          ttlMs: 30_000,
+          wait: true,
+          requestId: successorRequestId,
+        }))),
+      );
+      assert.equal(promoted.acquired, true, "successor re-POST triggers expiry sweep and observes promotion");
+      assert.ok(
+        promoted.fencing_token > first.fencing_token,
+        "promoted successor receives a strictly higher fencing token",
+      );
+      await c.lockRelease(key, { holder: successor, fencingToken: promoted.fencing_token });
+    });
+  });
+
+  it("durable cancellation removes a queued waiter without leaving a zombie grant", async (t) => {
+    const c = makeClient();
+    const key = uniqueKey("lease-cancel-no-zombie");
+    const owner = uniqueId("owner");
+    const cancelled = uniqueId("cancelled-waiter");
+    const successor = uniqueId("post-cancel-successor");
+    const cancelledRequestId = uniqueId("cancelled-attempt");
+
+    await skipIfUndeployed(t, "POST /v1/locks/cancel (durable cancellation)", async () => {
+      const held = output(await c.tryLock(key, { holder: owner, ttlMs: 30_000 }));
+      assert.equal(held.acquired, true);
+      const queued = output(await c.tryLock(key, {
+        holder: cancelled,
+        ttlMs: 30_000,
+        wait: true,
+        waitTimeoutMs: 30_000,
+        requestId: cancelledRequestId,
+      }));
+      assert.equal(queued.queued, true, "the soon-cancelled client first enters the queue");
+      assert.equal(typeof queued.wait_expires_ms, "number", "queued request has a bounded wait lease");
+
+      const result = output(await c.lockCancel(key, {
+        holder: cancelled,
+        requestId: cancelledRequestId,
+      }));
+      assert.equal(result.cancelled, true, "cancellation is durably committed");
+      assert.equal(result.acquired, false, "the cancelled waiter did not race into ownership");
+      const afterCancel = (await c.lockGet(key))?.lock;
+      assert.equal(afterCancel?.holder, owner, "cancellation never releases the active owner");
+      assert.equal(
+        afterCancel?.wait_queue?.some((waiter) => waiter.holder === cancelled),
+        false,
+        "cancelled identity is absent from the durable queue",
+      );
+
+      await c.lockRelease(key, {
+        holder: owner,
+        fencingToken: held.fencing_token,
+      });
+      const next = output(await c.tryLock(key, { holder: successor, ttlMs: 30_000 }));
+      assert.equal(next.acquired, true, "a later requester progresses immediately after owner release");
+      assert.equal((await c.lockGet(key))?.lock?.holder, successor, "cancelled waiter never becomes a zombie owner");
+      await c.lockRelease(key, { holder: successor, fencingToken: next.fencing_token });
+    });
+  });
+
+  it("cancellation reports the fencing authority if expiry promotion wins the race", async (t) => {
+    const c = makeClient();
+    const key = uniqueKey("lease-cancel-race");
+    const owner = uniqueId("expiring-owner");
+    const waiter = uniqueId("racing-waiter");
+    const waiterRequestId = uniqueId("racing-attempt");
+
+    await skipIfUndeployed(t, "POST /v1/locks/cancel (promotion race)", async () => {
+      const held = output(await c.tryLock(key, { holder: owner, ttlMs: SHORT_TTL }));
+      assert.equal(held.acquired, true);
+      const queued = output(await c.tryLock(key, {
+        holder: waiter,
+        ttlMs: 30_000,
+        wait: true,
+        waitTimeoutMs: 30_000,
+        requestId: waiterRequestId,
+      }));
+      assert.equal(queued.queued, true);
+
+      await sleep(SHORT_TTL + 300);
+      const raced = output(await c.lockCancel(key, {
+        holder: waiter,
+        requestId: waiterRequestId,
+      }));
+      assert.equal(raced.cancelled, false, "an active grant is never cancelled behind its holder");
+      assert.equal(raced.acquired, true, "the response reports that promotion won the race");
+      assert.ok(
+        raced.fencing_token > held.fencing_token,
+        "the raced authority carries a higher fencing token than the expired owner",
+      );
+      assert.equal((await c.lockGet(key))?.lock?.holder, waiter, "reported authority matches live state");
+      await c.lockRelease(key, { holder: waiter, fencingToken: raced.fencing_token });
+    });
+  });
+
+  it("cancel-before-late-acquire suppresses only the same unique request_id", async (t) => {
+    const c = makeClient();
+    const lockKey = uniqueKey("lease-cancel-before-lock");
+    const semaphoreKey = uniqueKey("lease-cancel-before-semaphore");
+    const lockHolder = uniqueId("late-lock-holder");
+    const semaphoreHolder = uniqueId("late-semaphore-holder");
+    const lockRequestId = uniqueId("late-lock-attempt");
+    const semaphoreRequestId = uniqueId("late-semaphore-attempt");
+
+    await skipIfUndeployed(t, "attempt-scoped cancel-before-acquire", async () => {
+      const lockCancel = output(await c.lockCancel(lockKey, {
+        holder: lockHolder,
+        requestId: lockRequestId,
+      }));
+      assert.equal(lockCancel.cancelled, true, "lock cancellation commits before the request arrives");
+      assert.equal(lockCancel.acquired, false);
+      const lateLock = output(await c.tryLock(lockKey, {
+        holder: lockHolder,
+        ttlMs: 30_000,
+        wait: true,
+        requestId: lockRequestId,
+      }));
+      assert.equal(lateLock.acquired, false, "the cancelled lock attempt cannot arrive late and win");
+      assert.equal(lateLock.queued, false, "the cancelled lock attempt cannot become a zombie waiter");
+
+      const freshLock = output(await c.tryLock(lockKey, {
+        holder: lockHolder,
+        ttlMs: 30_000,
+        requestId: uniqueId("fresh-lock-attempt"),
+      }));
+      assert.equal(freshLock.acquired, true, "a new lock attempt from the same holder is not tombstoned");
+      await c.lockRelease(lockKey, {
+        holder: lockHolder,
+        fencingToken: freshLock.fencing_token,
+      });
+
+      const semaphoreCancel = output(await c.semaphoreCancel(semaphoreKey, {
+        holder: semaphoreHolder,
+        requestId: semaphoreRequestId,
+      }));
+      assert.equal(
+        semaphoreCancel.cancelled,
+        true,
+        "semaphore cancellation commits before the request arrives",
+      );
+      assert.equal(semaphoreCancel.acquired, false);
+      const latePermit = output(await c.semaphoreAcquire(semaphoreKey, {
+        holder: semaphoreHolder,
+        ttlMs: 30_000,
+        limit: 1,
+        wait: true,
+        requestId: semaphoreRequestId,
+      }));
+      assert.equal(latePermit.acquired, false, "the cancelled permit attempt cannot arrive late and win");
+      assert.equal(latePermit.queued, false, "the cancelled permit attempt cannot become a zombie waiter");
+
+      const freshPermit = output(await c.semaphoreAcquire(semaphoreKey, {
+        holder: semaphoreHolder,
+        ttlMs: 30_000,
+        limit: 1,
+        requestId: uniqueId("fresh-semaphore-attempt"),
+      }));
+      assert.equal(
+        freshPermit.acquired,
+        true,
+        "a new permit attempt from the same holder is not tombstoned",
+      );
+      await c.semaphoreRelease(semaphoreKey, {
+        holder: semaphoreHolder,
+        fencingToken: freshPermit.fencing_token,
+      });
     });
   });
 });
