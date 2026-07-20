@@ -37,7 +37,7 @@ jobs:
           repository: fiducia-cloud/fiducia-test-config
           ref: 825220281fdc16bbf47a035177001d2fe29bdabf
           path: fiducia-test-config
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
         with:
           node-version: "22.17.0"
       - name: Install locked dependencies without lifecycle scripts
@@ -71,7 +71,7 @@ jobs:
           repository: fiducia-cloud/fiducia-test-config
           ref: 825220281fdc16bbf47a035177001d2fe29bdabf
           path: fiducia-test-config
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
         with:
           node-version: "22.17.0"
       - name: Check out fiducia-infra (kind tier)
