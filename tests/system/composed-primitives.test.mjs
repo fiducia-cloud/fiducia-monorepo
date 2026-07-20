@@ -18,7 +18,9 @@
 import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-import { FiduciaClient, output } from "../../src/client.mjs";
+import { setTimeout as delay } from "node:timers/promises";
+
+import { FiduciaClient, HttpError, output } from "../../src/client.mjs";
 import {
   bootCoordinationStack,
   coordinationSkipReason,
