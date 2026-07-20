@@ -32,6 +32,34 @@ import { uniqueId, uniqueKey } from "../helpers.mjs";
 const SKIP = coordinationSkipReason();
 const ORG = "e2e-composed";
 
+/** Poll every node's /v1/status until all shards are led with quorum. */
+async function waitConverged(nodeUrls, shardCount, { timeoutMs = 60_000 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const ledShards = new Set();
+    for (const nodeUrl of nodeUrls) {
+      try {
+        const res = await fetch(`${nodeUrl}/v1/status`, {
+          headers: { [INTERNAL_AUTH_HEADER]: INTERNAL_SECRET },
+        });
+        if (!res.ok) continue;
+        const status = await res.json();
+        const shards = status?.consensus?.shards ?? status?.shards ?? [];
+        for (const shard of shards) {
+          if (shard.role === "leader" && shard.has_quorum) ledShards.add(shard.shard_id);
+        }
+      } catch {
+        // node not up yet; keep polling
+      }
+    }
+    if (ledShards.size >= shardCount) return;
+    if (Date.now() > deadline) {
+      throw new Error(`cluster did not converge: ${ledShards.size}/${shardCount} shards led in ${timeoutMs}ms`);
+    }
+    await delay(250);
+  }
+}
+
 /** Read the boolean "did I win/acquire" flag across the primitives' vocabularies. */
 function truthyFlag(value, ...keys) {
   const o = output(value);
