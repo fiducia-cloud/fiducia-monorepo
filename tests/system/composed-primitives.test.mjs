@@ -192,11 +192,17 @@ describe("composed coordination workflows", { skip: SKIP }, () => {
     const name = uniqueId("singleton");
     const candidates = ["a", "b", "c"].map((s) => uniqueId(`cand-${s}`));
 
+    // The leadership fencing token may sit at the top level or under
+    // `.leadership` depending on the build (mirrors conformance's tokenOf).
+    const tokenOf = (r) => {
+      const o = output(r);
+      return o?.fencing_token ?? o?.leadership?.fencing_token;
+    };
     const results = await Promise.all(
       candidates.map((cand) => lb.electionCampaign(name, cand, 15_000, { cand })),
     );
     const winners = results
-      .map((r, i) => ({ cand: candidates[i], won: truthyFlag(r, "won", "acquired", "elected"), token: output(r)?.fencing_token }))
+      .map((r, i) => ({ cand: candidates[i], won: truthyFlag(r, "won", "acquired", "elected"), token: tokenOf(r) }))
       .filter((r) => r.won === true);
 
     // If the build reports a win flag at all, there must be exactly one winner.
