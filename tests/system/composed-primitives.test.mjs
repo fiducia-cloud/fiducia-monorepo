@@ -24,6 +24,7 @@ import { FiduciaClient, HttpError, output } from "../../src/client.mjs";
 import {
   bootCoordinationStack,
   coordinationSkipReason,
+  INTERNAL_AUTH_HEADER,
   INTERNAL_SECRET,
 } from "../../src/coordination.mjs";
 import { uniqueId, uniqueKey } from "../helpers.mjs";
