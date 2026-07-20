@@ -249,7 +249,8 @@ describe("composed coordination workflows", { skip: SKIP }, () => {
       Array.from({ length: EXPECTED }, (_, i) =>
         lb
           .barrierArrive({ name, participant: `p-${i}` })
-          .then((r) => output(r).released === true),
+          // Arrive output: { ok, resolved, barrier }. The last arrival flips it.
+          .then((r) => output(r).resolved === true),
       ),
     );
     const releaseEdges = arrivals.filter(Boolean).length;
