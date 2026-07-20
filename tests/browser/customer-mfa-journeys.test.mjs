@@ -310,6 +310,60 @@ describe("real-browser customer + MFA journeys", { skip: SKIP, concurrency: 1 },
         await close();
       }
     });
+
+    // Regression guard for the MFA-bypass class: step-up was originally wired
+    // into the passwordless path only, so a verified-factor account could skip
+    // 2FA entirely by signing in through the password form. The assertion that
+    // matters is the negative one — the password grant alone must issue NO
+    // session. Every primary factor has to converge on the same step-up gate,
+    // so this journey mirrors the email-OTP one above through the other door.
+    it("TOTP step-up also fires on PASSWORD login: the password factor alone issues no session", { timeout: 60_000 }, async () => {
+      const { context, page, close } = await pwPage();
+      try {
+        await page.goto(customerUrl("/login"), { waitUntil: "domcontentloaded" });
+        await page.waitForSelector('form[action="/login"] input[name="email"]');
+        await page.fill('form[action="/login"] input[name="email"]', CUSTOMER_MFA.email);
+        await page.fill('form[action="/login"] input[name="password"]', CUSTOMER_MFA.password);
+        await Promise.all([
+          page.waitForNavigation({ waitUntil: "domcontentloaded" }),
+          page.click('form[action="/login"] button[type="submit"]'),
+        ]);
+
+        // Correct credentials, but a verified authenticator is enrolled: this
+        // must park on the challenge, never the dashboard.
+        assert.notEqual(
+          new URL(page.url()).pathname,
+          "/app",
+          "a verified-factor account must not reach /app on the password factor alone",
+        );
+        await page.waitForSelector('form[action="/login/mfa"] input[name="code"]');
+        let cookies = await context.cookies(customerUrl());
+        assert.equal(
+          cookies.find((c) => c.name === CUSTOMER_SESSION_COOKIE),
+          undefined,
+          "no app session is issued from the password factor alone",
+        );
+        assert.ok(
+          cookies.find((c) => c.name === CUSTOMER_MFA_PENDING_COOKIE),
+          "the interim aal1 token rides the MFA-pending cookie",
+        );
+
+        // Completing the challenge issues the session, as on the OTP path.
+        await page.fill('form[action="/login/mfa"] input[name="code"]', STUB_TOTP_CODE);
+        await Promise.all([
+          page.waitForNavigation({ waitUntil: "domcontentloaded" }),
+          page.click('form[action="/login/mfa"] button[type="submit"]'),
+        ]);
+        assert.equal(new URL(page.url()).pathname, "/app", "completing step-up lands on /app");
+        cookies = await context.cookies(customerUrl());
+        assert.ok(
+          cookies.find((c) => c.name === CUSTOMER_SESSION_COOKIE)?.value,
+          "the app session cookie is issued only after aal2",
+        );
+      } finally {
+        await close();
+      }
+    });
   });
 
   // ── Puppeteer: negative + separation paths ─────────────────────────────────
