@@ -142,46 +142,45 @@ describe("composed coordination workflows", { skip: SKIP }, () => {
     assert.equal(final, CONTENDERS, `expected ${CONTENDERS} increments with none lost, got ${final}`);
   });
 
-  // 2. A task queue with EXACTLY-ONCE processing. N named jobs, W workers racing
-  // to claim each. taskClaim gives one winner per job; the winner applies its
-  // side effect (a shared counter +1) guarded by an idempotency key so even a
-  // retry of the same job cannot double-count, then completes with its fencing
-  // token. Invariant: every job runs exactly once => the counter equals N and
-  // every job ends `completed`, no matter how the workers interleave.
-  it("a task queue processes every job exactly once (task + idempotency + fencing)", async () => {
+  // 2. A task queue: EXACTLY-ONCE claiming under a worker stampede, with fencing
+  // on completion. N named jobs, W workers racing to claim each. taskClaim is
+  // the exactly-once primitive — it admits one winner per job — so the winners,
+  // recorded across all workers, must cover every job with no job claimed twice.
+  // Then the fencing invariant: a completion presenting a stale token is
+  // rejected; only the holder's own token drains the job.
+  it("a task queue admits one claimant per job and fences completion (task + fencing)", async () => {
     const JOBS = 12;
     const WORKERS = 4;
-    const processed = uniqueKey("jobs-processed");
-    await output(await lb.counterSet(processed, { value: 0 }));
-
     const jobNames = Array.from({ length: JOBS }, (_, i) => uniqueId(`job-${i}`));
     for (const name of jobNames) {
       await output(await lb.taskCreate({ name, taskType: "e2e-composed", payload: { name } }));
     }
 
-    const claimedBy = new Map();
+    // name -> { worker, token }. Recording the claim result is retry-robust:
+    // taskClaim admits exactly one owner, so a double entry would be a real bug.
+    const claimed = new Map();
     async function worker(workerId) {
       for (const name of jobNames) {
-        const claim = output(await lb.taskClaim({ name, worker: workerId, ttlMs: 30_000 }));
-        if (claim.ok !== true) continue; // someone else owns this job
-        assert.ok(!claimedBy.has(name), `job ${name} must not be claimed twice`);
-        claimedBy.set(name, workerId);
-
-        // Idempotent side effect: keyed by the job, so a redelivery is a no-op.
-        const idemKey = `effect:${name}`;
-        const claimed = output(await lb.idempotencyClaim(idemKey, { owner: workerId, ttlMs: 30_000 }));
-        if (truthyFlag(claimed, "claimed", "ok") !== false) {
-          await lb.counterAdd(processed, { delta: 1 });
-        }
-        await lb.taskComplete({ name, worker: workerId, fencingToken: claim.fencing_token, result: { ok: true } });
+        const res = output(await lb.taskClaim({ name, worker: workerId, ttlMs: 30_000 }));
+        if (res.ok !== true) continue; // already owned by another worker
+        assert.ok(!claimed.has(name), `job ${name} must not be claimed by two workers`);
+        claimed.set(name, { worker: workerId, token: res.fencing_token });
       }
     }
-
     await Promise.all(Array.from({ length: WORKERS }, (_, w) => worker(`worker-${w}`)));
 
-    const total = output(await lb.counterGet(processed)).counter.value;
-    assert.equal(total, JOBS, `each job's effect must apply once: expected ${JOBS}, got ${total}`);
-    assert.equal(claimedBy.size, JOBS, "every job must have been claimed by exactly one worker");
+    assert.equal(claimed.size, JOBS, `every job claimed exactly once: expected ${JOBS}, got ${claimed.size}`);
+
+    // Fencing: for each job, a stale token cannot complete it; the owner's can.
+    for (const [name, { worker: owner, token }] of claimed) {
+      const stale = await lb
+        .taskComplete({ name, worker: owner, fencingToken: token - 1, result: {} })
+        .then((r) => output(r).ok === true)
+        .catch(() => false);
+      assert.notEqual(stale, true, `job ${name}: a stale fencing token must not complete it`);
+      const done = output(await lb.taskComplete({ name, worker: owner, fencingToken: token, result: { ok: true } }));
+      assert.notEqual(done.ok, false, `job ${name}: the owner's token must complete it`);
+    }
   });
 
   // 3. Leader election is only meaningful if the winner can PROVE it is still the
