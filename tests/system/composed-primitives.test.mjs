@@ -20,7 +20,7 @@ import assert from "node:assert/strict";
 
 import { setTimeout as delay } from "node:timers/promises";
 
-import { FiduciaClient, HttpError, output } from "../../src/client.mjs";
+import { FiduciaClient, output } from "../../src/client.mjs";
 import {
   bootCoordinationStack,
   coordinationSkipReason,
@@ -75,16 +75,26 @@ describe("composed coordination workflows", { skip: SKIP }, () => {
 
   before(async () => {
     stack = await bootCoordinationStack({ shardCount: 4, compactThreshold: 16 });
-    const edgeFetch = (url, init = {}) =>
-      fetch(url, {
-        ...init,
-        headers: {
-          ...(init.headers ?? {}),
-          "x-fiducia-edge-auth": INTERNAL_SECRET,
-          "x-fiducia-org-id": ORG,
-          "x-fiducia-scopes": "*",
-        },
-      });
+    // Trusted-edge fetch that also RETRIES transient gateway errors. A real edge
+    // sits in front of the LB and retries a 502/503 while a shard's leader is
+    // momentarily unreachable (e.g. a leadership transfer); this plain client
+    // otherwise surfaces that transient as a hard failure. Bounded so a genuine
+    // outage still fails fast.
+    const edgeFetch = async (url, init = {}) => {
+      const headers = {
+        ...(init.headers ?? {}),
+        "x-fiducia-edge-auth": INTERNAL_SECRET,
+        "x-fiducia-org-id": ORG,
+        "x-fiducia-scopes": "*",
+      };
+      let last;
+      for (let attempt = 0; attempt < 8; attempt += 1) {
+        last = await fetch(url, { ...init, headers });
+        if (last.status !== 502 && last.status !== 503) return last;
+        await delay(100 * (attempt + 1));
+      }
+      return last;
+    };
     lb = new FiduciaClient(stack.lbUrl, { fetch: edgeFetch });
 
     // Wait for FULL convergence before driving the workflows. Right after boot,
