@@ -57,6 +57,26 @@ describe("composed coordination workflows", { skip: SKIP }, () => {
         },
       });
     lb = new FiduciaClient(stack.lbUrl, { fetch: edgeFetch });
+
+    // Warm up: right after boot the coordinator shard (locks/tasks/elections)
+    // may not have elected a leader yet, and the LB answers 502/503 until it can
+    // forward. Poll a throwaway lock on that shard until it is served, so the
+    // tests below start against a converged cluster rather than racing election.
+    const deadline = Date.now() + 60_000;
+    for (;;) {
+      try {
+        const probe = uniqueKey("warmup");
+        const g = output(await lb.tryLock(probe, { holder: "warmup", ttlMs: 2_000 }));
+        if (g.acquired) {
+          await lb.lockRelease(probe, { holder: "warmup", fencingToken: g.fencing_token });
+          break;
+        }
+      } catch (error) {
+        if (!(error instanceof HttpError) || Date.now() > deadline) throw error;
+      }
+      if (Date.now() > deadline) throw new Error("cluster did not become ready in 60s");
+      await delay(200);
+    }
   }, { timeout: 900_000 }); // first run compiles fiducia-node + fiducia-load-balance
 
   after(async () => {
