@@ -14,7 +14,12 @@
     "test:browser": "FIDUCIA_E2E_BROWSER=1 FIDUCIA_E2E_WEBAPPS=1 node --test --test-concurrency=1 'tests/browser/**/*.test.mjs'",
     "test:smoke": "node --test tests/smoke.test.mjs",
     "proof:hetzner": "FIDUCIA_E2E_ALLOW_INSECURE_LOCALHOST=1 node scripts/prove-hetzner.mjs",
-    "lint": "node scripts/lint.mjs"
+    "lint": "node scripts/lint.mjs",
+    "test:browser:playwright": "FIDUCIA_E2E_BROWSER=1 FIDUCIA_E2E_WEBAPPS=1 node --test --test-concurrency=1 'tests/browser/playwright/**/*.test.mjs'",
+    "test:browser:puppeteer": "FIDUCIA_E2E_BROWSER=1 FIDUCIA_E2E_WEBAPPS=1 node --test --test-concurrency=1 'tests/browser/puppeteer/**/*.test.mjs'",
+    "test:browser:selenium": "FIDUCIA_E2E_BROWSER=1 FIDUCIA_E2E_WEBAPPS=1 node --test --test-concurrency=1 'tests/browser/selenium/**/*.test.mjs'",
+    "test:chaos:browser": "FIDUCIA_E2E_BROWSER=1 node --test --test-concurrency=1 'tests/chaos/selenium/**/*.test.mjs' 'tests/chaos/playwright/**/*.test.mjs' 'tests/chaos/puppeteer/**/*.test.mjs'",
+    "test:multicluster:browser": "FIDUCIA_E2E_BROWSER=1 FIDUCIA_E2E_MULTICLUSTER=1 node --test --test-concurrency=1 'tests/multicluster/selenium/**/*.test.mjs' 'tests/multicluster/playwright/**/*.test.mjs' 'tests/multicluster/puppeteer/**/*.test.mjs'"
   },
   "engines": {
     "node": ">=22"
@@ -22,6 +27,7 @@
   "devDependencies": {
     "@fiducia/test-config": "file:../fiducia-test-config",
     "playwright": "^1.61.1",
-    "puppeteer": "^25.3.0"
+    "puppeteer": "^25.3.0",
+    "selenium-webdriver": "^4.46.0"
   }
 }

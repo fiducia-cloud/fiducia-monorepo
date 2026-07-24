@@ -23,3 +23,14 @@ workloads.
 An ordinary run without exactly three independently routed endpoints skips.
 Strict proof mode fails closed. A single local Kind cluster is not a substitute
 for this layer.
+
+## Browser-driven chaos (`selenium/`, `playwright/`, `puppeteer/`)
+
+Per-framework subfolders re-prove endpoint resilience through a REAL browser:
+every configured endpoint's health surface must serve and render in the
+browser, keep serving the survivors while one cluster is disrupted (only with
+`FIDUCIA_E2E_ALLOW_DISRUPTIVE=1` + a validated topology), and recover after
+heal. Shared journey: `src/browser-endpoints.mjs`. Run with
+`npm run test:chaos:browser` (Selenium additionally needs a reachable Grid —
+see `tests/browser/README.md`). Plain fetch-level chaos specs stay directly in
+this folder.

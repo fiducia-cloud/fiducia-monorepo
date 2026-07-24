@@ -33,3 +33,11 @@ committed data after the restarted member rejoins.
 
 The suite starts temporary `kubectl port-forward` processes for the brain peer
 Services and always terminates them. It never creates or deletes clusters.
+
+## Browser-driven multicluster (`selenium/`, `playwright/`, `puppeteer/`)
+
+Per-framework subfolders prove every cluster in the validated topology serves
+its health surface to a REAL browser (shared journey:
+`src/browser-endpoints.mjs`). Run with `npm run test:multicluster:browser`;
+Selenium additionally needs a reachable Grid (see `tests/browser/README.md`).
+Plain fetch-level multicluster specs stay directly in this folder.
