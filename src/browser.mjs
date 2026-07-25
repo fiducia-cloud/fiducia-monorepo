@@ -44,12 +44,26 @@ export function browserSkipReason({ requireStack = true } = {}) {
   return webAppsSkipReason() ?? false;
 }
 
-/** Launch Playwright Chromium; returns `{ browser, context, page, close }`. */
+/**
+ * Launch Playwright Chromium — or connect to a REMOTE Playwright server when
+ * `FIDUCIA_E2E_PLAYWRIGHT_WS` is set (a `playwright run-server` / browser
+ * server, e.g. one deployed in the k8s cluster). Returns
+ * `{ browser, context, page, close }`; `close` disconnects (not closes) a
+ * shared remote browser so other callers keep it.
+ *
+ * NB: routing Playwright through the deployed **Selenium Grid** does NOT work
+ * over a port-forward — the Grid hands back the node's pod-internal CDP address
+ * which the runner cannot reach. Use Selenium (RemoteWebDriver) for the Grid;
+ * use `FIDUCIA_E2E_PLAYWRIGHT_WS` for a dedicated Playwright server.
+ */
 export async function launchPlaywright() {
   const { chromium } = await import("playwright");
-  const browser = await chromium.launch();
+  const wsEndpoint = process.env.FIDUCIA_E2E_PLAYWRIGHT_WS?.trim();
+  const browser = wsEndpoint ? await chromium.connect(wsEndpoint) : await chromium.launch();
   const context = await browser.newContext();
   const page = await context.newPage();
+  // For a connected browser, close() disconnects the client and leaves the
+  // remote server running; for a launched one it terminates the local browser.
   return {
     browser,
     context,
@@ -58,15 +72,26 @@ export async function launchPlaywright() {
   };
 }
 
-/** Launch Puppeteer Chrome; returns `{ browser, page, close }`. */
+/**
+ * Launch Puppeteer Chrome — or connect to a REMOTE browser when
+ * `FIDUCIA_E2E_PUPPETEER_WS` is set (a browserless / `chrome --remote-debugging`
+ * CDP websocket). Returns `{ browser, page, close }`; `close` disconnects a
+ * shared remote browser rather than terminating it.
+ *
+ * NB: a Selenium Grid is NOT a Puppeteer endpoint (Puppeteer speaks CDP, the
+ * Grid speaks WebDriver). Point this at a dedicated browserless/Chrome server.
+ */
 export async function launchPuppeteer() {
   const { default: puppeteer } = await import("puppeteer");
-  const browser = await puppeteer.launch();
+  const wsEndpoint = process.env.FIDUCIA_E2E_PUPPETEER_WS?.trim();
+  const browser = wsEndpoint
+    ? await puppeteer.connect({ browserWSEndpoint: wsEndpoint })
+    : await puppeteer.launch();
   const page = await browser.newPage();
   return {
     browser,
     page,
-    close: () => browser.close(),
+    close: () => (wsEndpoint ? browser.disconnect() : browser.close()),
   };
 }
 

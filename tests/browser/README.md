@@ -53,7 +53,10 @@ Use the org's long-lived Grid from `~/codes/ores/k8s-cluster`
 pod-internal):
 
 ```sh
-kubectl port-forward svc/dd-selenium-server 4444   # then npm run test:browser:selenium
+# The raw Grid :4444 is pod-internal (the Service only exposes the :8105 API),
+# so forward the DEPLOYMENT, not the service. See docs/remote-browser-servers.md.
+KUBECTL_NO_CONFIRM=1 kubectl --context dd-ec2-admin \
+  port-forward deploy/dd-selenium-server 4444:4444 -n default   # then npm run test:browser:selenium
 ```
 
 or any local `selenium/standalone-chromium` container. Configuration:

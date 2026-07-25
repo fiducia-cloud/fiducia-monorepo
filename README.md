@@ -56,6 +56,10 @@ its state is indeterminate.
 | `FIDUCIA_E2E_SYSTEM` | `1` enables the heavyweight coordination composition suite (`npm run test:system` sets it automatically) |
 | `FIDUCIA_E2E_MULTICLUSTER` | `1` enables the three-Kind-cluster suite (`npm run test:multicluster` sets it automatically) |
 | `FIDUCIA_E2E_BROWSER` | `1` enables the real-Chromium login-journey suite (`npm run test:browser` sets it, plus `FIDUCIA_E2E_WEBAPPS=1` for the underlying stack) |
+| `FIDUCIA_E2E_SELENIUM_URL` | Selenium Grid endpoint for the `selenium/` browser tiers (default `http://localhost:4444`; `SELENIUM_REMOTE_URL` is a fallback name). Point at a port-forwarded deployed Grid — see [docs/remote-browser-servers.md](docs/remote-browser-servers.md) |
+| `FIDUCIA_E2E_PUBLIC_BASE_URL` | rewrites a browser journey's target origin when the (remote) Grid's browser cannot reach the runner's `localhost` stack |
+| `FIDUCIA_E2E_PLAYWRIGHT_WS` | connect Playwright to a remote `playwright run-server` (`chromium.connect`) instead of a local browser |
+| `FIDUCIA_E2E_PUPPETEER_WS` | connect Puppeteer to a remote browserless/Chrome CDP endpoint (`puppeteer.connect`) instead of a local browser |
 | `FIDUCIA_E2E_ORG_ID` | the org id the configured credential resolves to; required with `FIDUCIA_E2E_LOCAL_EDGE_SECRET`, otherwise optional — enables exact org-scoped `key → shard` assertions |
 | `FIDUCIA_REPOS_ROOT` | optional parent directory containing sibling checkouts for the composition suites (default: this repo's parent) |
 
@@ -281,8 +285,21 @@ the local, commit-pinned `@fiducia/test-config` development harness from the
 lockfile for the opt-in composition contract, with package lifecycle scripts
 disabled.
 
+## Documentation
+
+Deeper references live in [`docs/`](docs/):
+
+- [docs/browser-automation.md](docs/browser-automation.md) — the
+  Selenium/Playwright/Puppeteer browser tiers, the composed stack, and the htmx
+  patterns/gotchas.
+- [docs/remote-browser-servers.md](docs/remote-browser-servers.md) — driving the
+  **deployed** Selenium Grid in `~/codes/ores/k8s-cluster` on AWS/Hetzner.
+- [docs/local-node-conformance.md](docs/local-node-conformance.md) — running the
+  conformance suite (incl. the **secrets** API) against a single local node.
+
 ## Related
 
 - [`fiducia-clients`](../fiducia-clients) — `PROTOCOL.md` is the endpoint/method source of truth this suite mirrors.
 - [`fiducia-node.rs`](../fiducia-node.rs) — the coordination engine and `/v1` route semantics.
 - [`fiducia-infra`](../fiducia-infra) — multi-cluster topology; the single-cluster kind tier is the local conformance target.
+- [`~/codes/ores/k8s-cluster`](../../ores/k8s-cluster) — hosts the deployed `dd-selenium-server` browser Grid (AWS/Hetzner).
