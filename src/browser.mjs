@@ -153,8 +153,40 @@ export function publicUrlFor(stackUrl) {
   const from = new URL(stackUrl);
   const to = new URL(override);
   from.protocol = to.protocol;
-  from.host = to.host;
+  // Swap the HOSTNAME (e.g. 127.0.0.1 -> host.docker.internal for a local grid,
+  // or -> a tunnel host for a remote grid) while KEEPING the stack's dynamic
+  // port, unless the override pins one explicitly.
+  from.hostname = to.hostname;
+  if (to.port) from.port = to.port;
   return from.toString();
+}
+
+/**
+ * Neutralize htmx on every enhanced form on the driver's CURRENT page so the
+ * next submit performs a real top-level navigation instead of an in-place AJAX
+ * swap. The fiducia forms are progressively enhanced — they carry both a native
+ * `method="post" action=…` and `hx-post` — so once htmx is out of the way the
+ * submit falls through to the browser's native form handling and the URL
+ * changes (which the journeys assert on).
+ *
+ * This is the Selenium analogue of the `htmx.min.js` stub the Playwright and
+ * Puppeteer suites install: WebDriver has no request interception, so instead
+ * of blocking the script we disable htmx in the page. Removing `hx-post` is NOT
+ * enough — htmx binds its `submit` handler DIRECTLY to the form during
+ * processing, so the attribute is already internalized. We therefore also
+ * replace each form with a clone, which drops htmx's listener; the clone has no
+ * hx-* attributes, so htmx's MutationObserver won't re-process it.
+ *
+ * Because cloning a form does NOT carry over values typed into its inputs
+ * (those are live properties, not attributes), call this BEFORE filling the
+ * form, then locate and fill the inputs on the surviving clone.
+ */
+export async function neutralizeHtmxForms(driver) {
+  await driver.executeScript(
+    "for (const f of document.querySelectorAll('form[hx-post],form[hx-get]')) {" +
+      " for (const a of ['hx-post','hx-get','hx-target','hx-swap','hx-push-url','hx-boost']) f.removeAttribute(a);" +
+      " f.replaceWith(f.cloneNode(true)); }",
+  );
 }
 
 /** Connect a RemoteWebDriver Chrome session; returns `{ driver, By, until, Key, close }`. */

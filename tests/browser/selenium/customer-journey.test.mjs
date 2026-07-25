@@ -11,7 +11,12 @@
 import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-import { launchSelenium, publicUrlFor, seleniumSkipReason } from "../../../src/browser.mjs";
+import {
+  launchSelenium,
+  neutralizeHtmxForms,
+  publicUrlFor,
+  seleniumSkipReason,
+} from "../../../src/browser.mjs";
 import { bootWebAppStack, CUSTOMER } from "../../../src/webapps.mjs";
 
 const SKIP = await seleniumSkipReason();
@@ -44,6 +49,12 @@ describe("real-browser customer journey (Selenium)", { skip: SKIP, concurrency: 
       se.until.elementLocated(se.By.css('form[action="/login"] input[name="email"]')),
       15_000,
     );
+    // The customer /login form is htmx-enhanced (hx-post + hx-swap="outerHTML"):
+    // an unmodified submit AJAX-swaps the body and never changes the URL, so the
+    // "/app" wait below would time out. Disable htmx first (BEFORE filling — it
+    // replaces the form with a clone, which would drop typed-in values) so the
+    // native form POST performs a real navigation.
+    await neutralizeHtmxForms(se.driver);
     await se.driver.findElement(se.By.css('input[name="email"]')).sendKeys(CUSTOMER.email);
     await se.driver.findElement(se.By.css('input[name="password"]')).sendKeys(CUSTOMER.password);
     await se.driver.findElement(se.By.css('form[action="/login"] button[type="submit"]')).click();

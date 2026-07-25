@@ -106,6 +106,24 @@ support.
 
 - Playwright: `context.route(url => url.pathname.endsWith("/assets/htmx.min.js"), route => route.fulfill({ body: "" }))`
 - Puppeteer: `page.setRequestInterception(true)` + `request.respond({ body: "" })` for that asset
+- **Selenium: `neutralizeHtmxForms(driver)`** (from `src/browser.mjs`). WebDriver
+  has no request interception, so instead of blocking the asset it disables htmx
+  **in the page**: it strips the `hx-*` attributes AND replaces each enhanced
+  form with a clone. The clone matters — htmx binds its `submit` handler
+  *directly* to the form during processing, so `removeAttribute("hx-post")` alone
+  leaves that listener attached and the submit still AJAX-swaps. Because cloning
+  drops the values typed into a form's inputs, call it **before** filling the
+  form, then locate and fill the surviving clone. (The admin `/login` is a plain
+  `method="post"` form and needs none of this; only the customer `/login` does.)
+
+**Origin guard (non-loopback browsers).** The admin/customer servers enforce
+`require_host` + `require_same_origin` on state-changing POSTs. Over a Grid whose
+browser reaches the stack through a non-loopback host (`FIDUCIA_E2E_PUBLIC_BASE_URL`,
+e.g. `host.docker.internal`), the debug-default origin `http://127.0.0.1:PORT` no
+longer matches and sign-in is rejected with `reason:"mismatched_host"`.
+`bootWebAppStack()` (`src/webapps.mjs` → `originForwarding`) pins each server's
+port and advertises the matching public origin so `Host`/`Origin` line up. Local
+Playwright/Puppeteer drive `http://127.0.0.1` directly and need no rewrite.
 
 ### 2. Drive htmx **fragment** endpoints through the page's own `fetch`
 

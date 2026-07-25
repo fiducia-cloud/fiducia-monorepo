@@ -355,6 +355,33 @@ export async function bootWebAppStack() {
   const stack = [];
   const stop = makeRetryableReverseStop(stack);
 
+  // When the browser reaches the stack through a NON-loopback host — a remote or
+  // containerised Selenium grid addressed via FIDUCIA_E2E_PUBLIC_BASE_URL — the
+  // admin/customer request-origin guard (require_host + require_same_origin)
+  // correctly rejects the state-changing POSTs: their debug-default origin is
+  // http://127.0.0.1:PORT, but the browser's Host/Origin is that public host, so
+  // sign-in fails with {"error":"…_request_rejected","reason":"mismatched_host"}.
+  // Pin each such server's port up front so we can advertise the MATCHING public
+  // origin (same port, swapped hostname) before it boots. Identity when unset —
+  // Playwright/Puppeteer drive http://127.0.0.1 directly and need no rewrite.
+  const publicHost = process.env.FIDUCIA_E2E_PUBLIC_BASE_URL?.trim()
+    ? new URL(process.env.FIDUCIA_E2E_PUBLIC_BASE_URL).hostname
+    : null;
+  const pinnedPort = () => 19000 + Math.floor(Math.random() * 1000);
+  /** For a server whose origin guard reads `originEnv`, force a fixed port and
+   *  advertise `http://<publicHost>:<port>` so a non-loopback browser passes.
+   *  Returns `{ env, opts }` to spread into the startServer call ({} when the
+   *  stack is loopback-only). publicUrlFor() keeps that same port, swapping only
+   *  the hostname, so the two agree. */
+  const originForwarding = (originEnv) => {
+    if (!publicHost) return { env: {}, opts: {} };
+    const port = pinnedPort();
+    return {
+      env: { [originEnv]: `http://${publicHost}:${port}` },
+      opts: { portRange: [port, port] },
+    };
+  };
+
   try {
     const supabase = await startStubSupabase({
       users: [OPERATOR, CUSTOMER, ORGLESS, CUSTOMER_MFA],
@@ -406,10 +433,12 @@ export async function bootWebAppStack() {
     });
     stack.push(auth);
 
+    const adminOrigin = originForwarding("FIDUCIA_ADMIN_ORIGIN");
     const admin = await startServer({
       command: cargoCommand(),
       args: ["run", "--quiet"],
       cwd: repoPath("fiducia-admin.rs"),
+      ...adminOrigin.opts,
       env: {
         ...cargoEnv(),
         DATABASE_URL: postgres.url("fiducia_admin"),
@@ -419,6 +448,7 @@ export async function bootWebAppStack() {
         SUPABASE_URL: supabase.url,
         SUPABASE_PUBLISHABLE_KEY: "stub-publishable-key",
         FIDUCIA_INSECURE_COOKIES: "1",
+        ...adminOrigin.env,
       },
       readyPath: "/healthz",
       startupTimeoutMs: 300000,
@@ -427,10 +457,12 @@ export async function bootWebAppStack() {
 
     const customerDist = join(repoPath("fiducia-customer-ui.web"), "dist");
     const marketingDist = join(repoPath("fiducia-marketing.web"), "dist");
+    const customerOrigin = originForwarding("CUSTOMER_APP_ORIGIN");
     const backend = await startServer({
       command: cargoCommand(),
       args: ["run", "--quiet"],
       cwd: repoPath("fiducia-customer.rs"),
+      ...customerOrigin.opts,
       env: {
         ...cargoEnv(),
         DATABASE_URL: postgres.url("fiducia_customer"),
@@ -438,6 +470,7 @@ export async function bootWebAppStack() {
         FIDUCIA_SITE_MODE: "customer",
         SUPABASE_URL: supabase.url,
         SUPABASE_PUBLISHABLE_KEY: "stub-publishable-key",
+        ...customerOrigin.env,
         // Debug-only: emit non-Secure session/CSRF/MFA cookies so the browser
         // jar is inspectable over http://127.0.0.1 (Playwright's cookies(url)
         // filters Secure cookies out of http origins). Mirrors the admin server.
