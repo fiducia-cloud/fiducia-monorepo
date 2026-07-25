@@ -19,6 +19,14 @@ import { isLoopbackHostname, validateEndpoint } from "./origin.mjs";
 
 const enc = encodeURIComponent;
 
+// The reserved keyspace for the end-user secrets API (mirrors fiducia-clients).
+function secretKey(name) {
+  if (typeof name !== "string" || name.length === 0) {
+    throw new Error("fiducia: secret name must be a non-empty string");
+  }
+  return `secret/${name}`;
+}
+
 /** Thrown for any non-2xx HTTP response. `status` lets tests treat 404
  *  (primitive not deployed) as skip while still failing on wrong behavior. */
 export class HttpError extends Error {
@@ -277,11 +285,12 @@ export class FiduciaClient {
   kvGet(key) {
     return this.request("GET", `/v1/kv?key=${enc(key)}`);
   }
-  kvPut(key, value, { ttlMs, prevRevision } = {}) {
+  kvPut(key, value, { ttlMs, prevRevision, plaintext } = {}) {
     return this.request("PUT", `/v1/kv?key=${enc(key)}`, {
       value,
       ttl_ms: ttlMs,
       prev_revision: prevRevision,
+      plaintext,
     });
   }
   kvDelete(key) {
@@ -293,6 +302,40 @@ export class FiduciaClient {
   // SSE stream — async generator of parsed { event, id, data } blocks.
   kvWatch(key, { signal } = {}) {
     return this.watch(`/v1/kv?key=${enc(key)}&watch=true`, signal);
+  }
+
+  // --- secrets (write-only ergonomics over the encrypted config KV) ---
+  // Mirrors fiducia-clients: reserved "secret/" keyspace, ALWAYS plaintext:false
+  // (at-rest encrypted); secretList strips values, secretReveal is the only read.
+  secretPut(name, value, { ttlMs, prevRevision } = {}) {
+    return this.request("PUT", `/v1/kv?key=${enc(secretKey(name))}`, {
+      value,
+      ttl_ms: ttlMs,
+      prev_revision: prevRevision,
+      plaintext: false,
+    });
+  }
+  secretReveal(name) {
+    return this.request("GET", `/v1/kv?key=${enc(secretKey(name))}`);
+  }
+  secretDelete(name) {
+    return this.request("DELETE", `/v1/kv?key=${enc(secretKey(name))}`);
+  }
+  async secretList(prefix = "") {
+    const res = await this.request("GET", `/v1/kv?prefix=${enc(`secret/${prefix}`)}`);
+    const items = Array.isArray(res?.keys) ? res.keys : [];
+    return {
+      prefix,
+      count: items.length,
+      secrets: items.map((item) => ({
+        name: typeof item?.key === "string" && item.key.startsWith("secret/")
+          ? item.key.slice("secret/".length)
+          : item?.key,
+        modRevision: item?.mod_revision,
+        expiresAtMs: item?.expires_at_ms,
+        protection: item?.protection,
+      })),
+    };
   }
 
   // --- leader election ---

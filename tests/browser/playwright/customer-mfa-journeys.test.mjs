@@ -86,6 +86,19 @@ describe("real-browser customer + MFA journeys", { skip: SKIP, concurrency: 1 },
 
   const customerUrl = (path = "") => `${stack.backend.url}${path}`;
 
+  // Sign in through the real /login form (Playwright), landing on /app.
+  async function signInWithPassword(page, user) {
+    await page.goto(customerUrl("/login"), { waitUntil: "domcontentloaded" });
+    await page.waitForSelector('form[action="/login"] input[name="email"]');
+    await page.fill('form[action="/login"] input[name="email"]', user.email);
+    await page.fill('form[action="/login"] input[name="password"]', user.password);
+    await Promise.all([
+      page.waitForNavigation({ waitUntil: "domcontentloaded" }),
+      page.click('form[action="/login"] button[type="submit"]'),
+    ]);
+    assert.equal(new URL(page.url()).pathname, "/app", "sign-in lands on /app");
+  }
+
   // ── Playwright: customer happy paths ───────────────────────────────────────
   describe("customer happy paths (Playwright)", () => {
     it("signs in through the real /login form and reaches the /app dashboard", { timeout: 60_000 }, async () => {
