@@ -223,6 +223,11 @@ describe("real-browser customer + MFA journeys", { skip: SKIP, concurrency: 1 },
         // Restore the shared suite account so the next journey starts without
         // an enrolled factor. The browser suites intentionally reuse one real
         // app stack, so persistent security state must be unwound explicitly.
+        await page.goto(customerUrl("/app/security/mfa"), { waitUntil: "domcontentloaded" });
+        await page.fill(
+          'form[action="/app/security/mfa/disable"] input[name="code"]',
+          STUB_TOTP_CODE,
+        );
         await Promise.all([
           page.waitForNavigation({ waitUntil: "domcontentloaded" }),
           page.click('form[action="/app/security/mfa/disable"] button[type="submit"]'),
@@ -251,6 +256,10 @@ describe("real-browser customer + MFA journeys", { skip: SKIP, concurrency: 1 },
         // Back on the management page the factor is listed with a Remove control.
         await page.goto(customerUrl("/app/security/mfa"), { waitUntil: "domcontentloaded" });
         await page.waitForSelector('form[action="/app/security/mfa/disable"] button');
+        await page.fill(
+          'form[action="/app/security/mfa/disable"] input[name="code"]',
+          STUB_TOTP_CODE,
+        );
         await Promise.all([
           page.waitForNavigation({ waitUntil: "domcontentloaded" }),
           page.click('form[action="/app/security/mfa/disable"] button[type="submit"]'),

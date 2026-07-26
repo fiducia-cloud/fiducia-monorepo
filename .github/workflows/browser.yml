@@ -38,6 +38,9 @@ jobs:
       # Keep Puppeteer's explicit download outside root's private home so the
       # unprivileged browser/test process can read it.
       PUPPETEER_CACHE_DIR: ${{ github.workspace }}/fiducia-e2e/.cache/puppeteer
+      # This job already runs as the unprivileged postgres user inside an
+      # ephemeral container, where nested Chromium user namespaces are disabled.
+      FIDUCIA_E2E_BROWSER_NO_SANDBOX: "1"
       # Sibling checkouts land next to fiducia-e2e in the workspace, exactly the
       # layout src/webapps.mjs' repoPath() expects (parent of the e2e checkout).
       FIDUCIA_REPOS_ROOT: ${{ github.workspace }}
@@ -68,7 +71,7 @@ jobs:
         with:
           persist-credentials: false
           repository: fiducia-cloud/fiducia-customer.rs
-          ref: 7367a790f3ba50f683cd3eec91bb1fdebc9b91a8
+          ref: cfea0c15281f2c928055150c1c493fb65ec9233f
           path: fiducia-customer.rs
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:

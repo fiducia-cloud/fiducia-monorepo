@@ -84,9 +84,16 @@ export async function launchPlaywright() {
 export async function launchPuppeteer() {
   const { default: puppeteer } = await import("puppeteer");
   const wsEndpoint = process.env.FIDUCIA_E2E_PUPPETEER_WS?.trim();
+  // Some nested CI containers cannot expose either Chromium's setuid sandbox
+  // or unprivileged user namespaces. Keep the escape hatch explicit so normal
+  // local and remote-browser runs retain Chrome's sandbox.
+  const launchOptions =
+    process.env.FIDUCIA_E2E_BROWSER_NO_SANDBOX === "1"
+      ? { args: ["--no-sandbox", "--disable-setuid-sandbox"] }
+      : {};
   const browser = wsEndpoint
     ? await puppeteer.connect({ browserWSEndpoint: wsEndpoint })
-    : await puppeteer.launch();
+    : await puppeteer.launch(launchOptions);
   const page = await browser.newPage();
   return {
     browser,
