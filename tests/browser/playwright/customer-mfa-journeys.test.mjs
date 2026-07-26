@@ -219,6 +219,14 @@ describe("real-browser customer + MFA journeys", { skip: SKIP, concurrency: 1 },
           page.click('form[action="/app/security/mfa/activate"] button[type="submit"]'),
         ]);
         assert.match(await page.content(), /Authenticator enabled/i, "activation confirms 2FA is on");
+
+        // Restore the shared suite account so the next journey starts without
+        // an enrolled factor. The browser suites intentionally reuse one real
+        // app stack, so persistent security state must be unwound explicitly.
+        await Promise.all([
+          page.waitForNavigation({ waitUntil: "domcontentloaded" }),
+          page.click('form[action="/app/security/mfa/disable"] button[type="submit"]'),
+        ]);
       } finally {
         await close();
       }
