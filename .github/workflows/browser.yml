@@ -35,6 +35,9 @@ jobs:
     env:
       # Playwright's bundled Chromium (shared by Puppeteer via the same binary).
       PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
+      # Keep Puppeteer's explicit download outside root's private home so the
+      # unprivileged browser/test process can read it.
+      PUPPETEER_CACHE_DIR: ${{ github.workspace }}/fiducia-e2e/.cache/puppeteer
       # Sibling checkouts land next to fiducia-e2e in the workspace, exactly the
       # layout src/webapps.mjs' repoPath() expects (parent of the e2e checkout).
       FIDUCIA_REPOS_ROOT: ${{ github.workspace }}
@@ -118,4 +121,11 @@ jobs:
           npx puppeteer browsers install chrome
       - name: Customer + MFA real-browser journeys
         working-directory: fiducia-e2e
-        run: npm run test:browser
+        run: |
+          set -euo pipefail
+          # The Playwright container defaults to root, but PostgreSQL correctly
+          # refuses to initialize a cluster as root. Hand the checked-out/build
+          # trees and rustup state to the package-created postgres account, then
+          # run the entire harness unprivileged.
+          chown -R postgres:postgres "$GITHUB_WORKSPACE" "$HOME/.cargo" "$HOME/.rustup"
+          runuser --user postgres --preserve-environment -- npm run test:browser
