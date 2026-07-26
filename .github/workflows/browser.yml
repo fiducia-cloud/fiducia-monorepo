@@ -95,7 +95,7 @@ jobs:
         run: |
           set -euo pipefail
           apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends postgresql postgresql-client unzip
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends build-essential postgresql postgresql-client unzip
           # The scratch Postgres harness shells out to these by name; put the
           # newest installed server's bin dir on PATH (find, not ls, for SC2012).
           pg_ver="$(find /usr/lib/postgresql -maxdepth 1 -mindepth 1 -type d -printf '%f\n' | sort -V | tail -1)"
