@@ -11,6 +11,7 @@ const enc = encodeURIComponent;
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 const TRACEPARENT = /^00-[0-9a-f]{32}-[0-9a-f]{16}-0[01]$/;
+const PUBLIC_ERROR_CODE = /^[A-Za-z][A-Za-z0-9_.:-]{0,127}$/;
 const FORBIDDEN_REPLICATED_KEYS = new Set([
   "authorization",
   "cookie",
@@ -58,7 +59,8 @@ function optionalString(value) {
 function publicErrorCode(value) {
   const code = value && typeof value === "object" ? value.error ?? value.code : undefined;
   if (typeof code !== "string") return "cron_service_error";
-  return code.replace(/[^A-Za-z0-9_.:-]/g, "_").slice(0, 128) || "cron_service_error";
+  const normalized = code.trim();
+  return PUBLIC_ERROR_CODE.test(normalized) ? normalized : "cron_service_error";
 }
 
 async function readBoundedJson(response, path, maxBytes) {
