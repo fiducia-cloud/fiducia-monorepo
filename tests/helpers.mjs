@@ -34,16 +34,20 @@ export const NO_ENDPOINT = primary()
  * on this build) mark the test skipped via `t.skip(...)` instead of failing.
  * A WRONG behavioral assertion inside `fn` still throws and FAILS the test.
  *
+ * A capability-specific promotion gate may pass `{ strict: true }` without
+ * impersonating the topology/attestation proof runner's private strict switch.
+ *
  * @param {import('node:test').TestContext} t
  * @param {string} label   what primitive/route we were exercising
  * @param {() => Promise<void>} fn
+ * @param {{strict?: boolean}} options
  */
-export async function skipIfUndeployed(t, label, fn) {
+export async function skipIfUndeployed(t, label, fn, { strict = STRICT_PROOF } = {}) {
   try {
     await fn();
   } catch (err) {
     if (err instanceof HttpError && (err.status === 404 || err.status === 501)) {
-      if (STRICT_PROOF) {
+      if (strict) {
         throw new Error(`${label}: strict proof requires this route (HTTP ${err.status})`, {
           cause: err,
         });
@@ -55,10 +59,10 @@ export async function skipIfUndeployed(t, label, fn) {
   }
 }
 
-/** In strict proof mode an absent response capability is a failure, not a skip. */
-export function capabilityOrSkip(t, condition, message) {
+/** In strict mode an absent response capability is a failure, not a skip. */
+export function capabilityOrSkip(t, condition, message, { strict = STRICT_PROOF } = {}) {
   if (condition) return true;
-  if (STRICT_PROOF) assert.fail(`strict proof requires capability: ${message}`);
+  if (strict) assert.fail(`strict proof requires capability: ${message}`);
   t.skip(message);
   return false;
 }
