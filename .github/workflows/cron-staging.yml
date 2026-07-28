@@ -1,0 +1,86 @@
+name: cron staging proof
+
+on:
+  workflow_dispatch:
+  workflow_call:
+    secrets:
+      FIDUCIA_E2E_BASE_URL:
+        required: true
+      FIDUCIA_E2E_INTERNAL_SECRET:
+        required: true
+      FIDUCIA_E2E_LAMBDA_SERVICE_URL:
+        required: true
+      FIDUCIA_E2E_LAMBDA_SERVER_AUTH_SECRET:
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cron-staging-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  strict-cron:
+    name: strict customer cron proof
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: staging
+    env:
+      FIDUCIA_E2E_BASE_URL: ${{ secrets.FIDUCIA_E2E_BASE_URL }}
+      FIDUCIA_E2E_INTERNAL_SECRET: ${{ secrets.FIDUCIA_E2E_INTERNAL_SECRET }}
+      FIDUCIA_E2E_LAMBDA_SERVICE_URL: ${{ secrets.FIDUCIA_E2E_LAMBDA_SERVICE_URL }}
+      FIDUCIA_E2E_LAMBDA_SERVER_AUTH_SECRET: ${{ secrets.FIDUCIA_E2E_LAMBDA_SERVER_AUTH_SECRET }}
+      FIDUCIA_E2E_CRON_STRICT: "1"
+      FIDUCIA_E2E_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+      FIDUCIA_E2E_TIMEOUT_MS: "15000"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: "22.17.0"
+          cache: npm
+      - name: Install locked dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts
+      - name: Validate staging inputs without printing secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const required = [
+            "FIDUCIA_E2E_BASE_URL",
+            "FIDUCIA_E2E_INTERNAL_SECRET",
+            "FIDUCIA_E2E_LAMBDA_SERVICE_URL",
+            "FIDUCIA_E2E_LAMBDA_SERVER_AUTH_SECRET",
+          ];
+          for (const name of required) {
+            if (!process.env[name]?.trim()) throw new Error(`${name} must be configured in the staging environment`);
+          }
+          for (const name of ["FIDUCIA_E2E_BASE_URL", "FIDUCIA_E2E_LAMBDA_SERVICE_URL"]) {
+            const url = new URL(process.env[name]);
+            if (url.protocol !== "https:") throw new Error(`${name} must use https`);
+            if (url.username || url.password) throw new Error(`${name} must not contain URL credentials`);
+            if (url.search || url.hash) throw new Error(`${name} must not contain a query or fragment`);
+          }
+          NODE
+      - name: Lint
+        run: node scripts/lint.mjs
+      - name: Always-on cron client contract
+        run: node --test tests/cron-service-client.test.mjs
+      - name: Strict live cron and managed-function proof
+        id: live
+        shell: bash
+        run: |
+          set -o pipefail
+          node --test --test-reporter=tap tests/conformance/cron-service.test.mjs \
+            2>&1 | tee /tmp/fiducia-cron-staging-proof.tap
+      - name: Upload sanitized proof transcript
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fiducia-cron-staging-proof-${{ github.run_id }}-${{ github.run_attempt }}
+          path: /tmp/fiducia-cron-staging-proof.tap
+          if-no-files-found: error
+          retention-days: 14

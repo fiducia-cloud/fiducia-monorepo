@@ -34,9 +34,40 @@ is disabled, and finally soft-deletes the definition.
 
 Plain HTTP is accepted only for loopback targets when
 `FIDUCIA_E2E_ALLOW_INSECURE_LOCALHOST=1`. An ordinary run skips live cases when
-the relevant service is not configured. `FIDUCIA_E2E_STRICT_PROOF=1` turns
-missing cron capabilities into failures, matching the rest of the strict proof
-suite.
+the relevant service is not configured. The topology/attestation proof runner's
+private `FIDUCIA_E2E_STRICT_PROOF=1` switch still makes every missing primitive a
+failure.
+
+For staging promotion, `FIDUCIA_E2E_CRON_STRICT=1` applies the same fail-closed
+behavior only to the cron and managed-function suite. It does not impersonate a
+three-cluster topology proof or relax that proof's attestation requirements.
+Missing internal credentials, lambda configuration, cron routes, schedule-run
+history, or managed-function capabilities fail instead of becoming skips.
+
+## Staging promotion workflow
+
+`.github/workflows/cron-staging.yml` is both manually dispatchable and reusable
+through `workflow_call`. It runs in the protected `staging` GitHub Environment
+and requires these environment/caller secrets:
+
+```text
+FIDUCIA_E2E_BASE_URL
+FIDUCIA_E2E_INTERNAL_SECRET
+FIDUCIA_E2E_LAMBDA_SERVICE_URL
+FIDUCIA_E2E_LAMBDA_SERVER_AUTH_SECRET
+```
+
+Both service URLs must use HTTPS, contain no URL credentials, and contain no
+query or fragment. The workflow runs lint, the always-on client contract, then
+the strict live schedule/function suite. It uploads a TAP transcript for 14 days
+using a high-entropy run namespace. The tests and workflow never echo service
+credentials, function source, invocation payloads, or raw upstream response
+bodies.
+
+A deployment or promotion workflow should call this reusable workflow after the
+staging rollout is ready and before promotion. A successful ordinary PR run is
+not staging evidence; the protected-environment strict workflow must pass with
+all four inputs configured.
 
 No test logs service credentials, function source, invocation payloads, or raw
 upstream response bodies. Ephemeral schedule and function identifiers are
