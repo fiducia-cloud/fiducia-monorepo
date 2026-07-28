@@ -20,6 +20,8 @@ import {
 const INTERNAL_SECRET = process.env.FIDUCIA_E2E_INTERNAL_SECRET?.trim();
 const LAMBDA_URL = process.env.FIDUCIA_E2E_LAMBDA_SERVICE_URL?.trim();
 const LAMBDA_SECRET = process.env.FIDUCIA_E2E_LAMBDA_SERVER_AUTH_SECRET?.trim();
+const CRON_STRICT = STRICT_PROOF || process.env.FIDUCIA_E2E_CRON_STRICT === "1";
+const CRON_GATE = { strict: CRON_STRICT };
 
 function internalClient(orgId) {
   const base = primary();
@@ -67,7 +69,12 @@ async function expectCronError(promise, status) {
 
 describe("cron service HTTP conformance", { skip: NO_ENDPOINT }, () => {
   it("isolates schedules by tenant and keeps function source outside Raft", async (t) => {
-    if (!capabilityOrSkip(t, Boolean(INTERNAL_SECRET), "FIDUCIA_E2E_INTERNAL_SECRET is required")) return;
+    if (!capabilityOrSkip(
+      t,
+      Boolean(INTERNAL_SECRET),
+      "FIDUCIA_E2E_INTERNAL_SECRET is required",
+      CRON_GATE,
+    )) return;
     const orgA = uniqueId("cron-org-a");
     const orgB = uniqueId("cron-org-b");
     const name = uniqueId("cron-isolation");
@@ -96,11 +103,16 @@ describe("cron service HTTP conformance", { skip: NO_ENDPOINT }, () => {
       } finally {
         await a.delete(name).catch(() => {});
       }
-    });
+    }, CRON_GATE);
   });
 
   it("supports pause/resume and idempotent manual triggers with a traceable run trail", async (t) => {
-    if (!capabilityOrSkip(t, Boolean(INTERNAL_SECRET), "FIDUCIA_E2E_INTERNAL_SECRET is required")) return;
+    if (!capabilityOrSkip(
+      t,
+      Boolean(INTERNAL_SECRET),
+      "FIDUCIA_E2E_INTERNAL_SECRET is required",
+      CRON_GATE,
+    )) return;
     const org = uniqueId("cron-org");
     const name = uniqueId("cron-trail");
     const service = new CronNodeService(internalClient(org));
@@ -126,6 +138,7 @@ describe("cron service HTTP conformance", { skip: NO_ENDPOINT }, () => {
           t,
           matching.length > 0,
           "schedule runner did not record the manual run within ten seconds",
+          CRON_GATE,
         )) return;
         assert.equal(matching.length, 1, "the same manual fire identity must produce one logical run");
 
@@ -144,14 +157,14 @@ describe("cron service HTTP conformance", { skip: NO_ENDPOINT }, () => {
       } finally {
         await service.delete(name).catch(() => {});
       }
-    });
+    }, CRON_GATE);
   });
 });
 
 describe("managed cron function lifecycle", () => {
   it("keeps definitions tenant-scoped and links only the opaque UUID into a schedule", async (t) => {
     if (!LAMBDA_URL || !LAMBDA_SECRET) {
-      if (STRICT_PROOF) assert.fail("strict proof requires the lambda-service URL and auth secret");
+      if (CRON_STRICT) assert.fail("strict cron proof requires the lambda-service URL and auth secret");
       t.skip("set FIDUCIA_E2E_LAMBDA_SERVICE_URL and FIDUCIA_E2E_LAMBDA_SERVER_AUTH_SECRET");
       return;
     }
@@ -221,7 +234,7 @@ describe("managed cron function lifecycle", () => {
         404,
       );
     } catch (error) {
-      if (error instanceof CronServiceError && [404, 501, 503].includes(error.status) && !STRICT_PROOF) {
+      if (error instanceof CronServiceError && [404, 501, 503].includes(error.status) && !CRON_STRICT) {
         t.skip(`managed cron function service is not deployable on this target (HTTP ${error.status})`);
         return;
       }
