@@ -3,15 +3,15 @@
   "repositories": {
     "fiducia-interfaces": {
       "repository": "fiducia-cloud/fiducia-interfaces",
-      "sha": "0e3dca3f70d61ac94a8904969c5dcd1868321aec"
+      "sha": "6081bc3f3b7cbe0312870968b61acc38ca91c66a"
     },
     "fiducia-clients": {
       "repository": "fiducia-cloud/fiducia-clients",
-      "sha": "af059789577b09d150b7846cfdbd64ee7c8976af"
+      "sha": "0ff5f695c2ce440b19ae8104031ed2d47c080218"
     },
     "fiducia-sync": {
       "repository": "fiducia-cloud/fiducia-sync",
-      "sha": "4ae9a6d816ade78ed6af2b7b90bffc5b83683926"
+      "sha": "e4cb47c9582e11de62c0f19ce3511d3b7c1cce04"
     }
   }
 }
