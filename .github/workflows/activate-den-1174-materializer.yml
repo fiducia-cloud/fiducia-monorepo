@@ -1,0 +1,34 @@
+name: Activate DEN-1174 materializer
+
+on:
+  push:
+    branches:
+      - agent/den-1174-selenium-secure-origins
+    paths:
+      - .github/workflows/activate-den-1174-materializer.yml
+
+permissions:
+  contents: write
+
+jobs:
+  activate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: agent/den-1174-selenium-secure-origins
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Remove the redundant actor gate and self-delete
+        shell: bash
+        run: |
+          set -euo pipefail
+          sed -i "/^[[:space:]]*if: github.actor == 'ORESoftware'$/d" .github/workflows/materialize-den-1174-public-origin-contract.yml
+          git rm .github/workflows/activate-den-1174-materializer.yml
+          git diff --check
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add .github/workflows/materialize-den-1174-public-origin-contract.yml
+          git commit -m 'ci(DEN-1174): activate exact-branch materializer'
+          git push origin HEAD:refs/heads/agent/den-1174-selenium-secure-origins
