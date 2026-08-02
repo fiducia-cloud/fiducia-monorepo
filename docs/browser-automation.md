@@ -86,7 +86,9 @@ AWS/Hetzner access story, the localhost-target caveat, and why only Selenium
 | Var | Meaning |
 |-----|---------|
 | `FIDUCIA_E2E_SELENIUM_URL` | Grid endpoint (default `http://localhost:4444`; `SELENIUM_REMOTE_URL` is honored as a fallback) |
-| `FIDUCIA_E2E_PUBLIC_BASE_URL` | when the Grid runs remotely (in-cluster), its browser cannot reach the runner's `127.0.0.1` stack; this rewrites the target origin to one the Grid can reach |
+| `FIDUCIA_E2E_PUBLIC_BASE_URL` | origin-only HTTP(S) base used when a remote Grid cannot reach the runner's `127.0.0.1` stack; protocol/hostname are replaced and a dynamic stack port is preserved unless this value pins a port |
+
+`FIDUCIA_E2E_PUBLIC_BASE_URL` is validated as an origin, not a general URL: credentials, paths, queries, fragments, relative values, and non-HTTP(S) schemes fail before a browser session is used.
 
 `seleniumSkipReason()` probes the Grid's `/status` once — an **unreachable Grid
 skips the suite cleanly with the reason**, it never hangs or hard-fails.

@@ -17,6 +17,8 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { webAppsSkipReason } from "./webapps.mjs";
+import { publicUrlFor } from "./browser-url.mjs";
+export { publicUrlFor } from "./browser-url.mjs";
 
 const E2E_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -147,25 +149,6 @@ export async function seleniumSkipReason({ requireStack = true } = {}) {
   }
   if (!requireStack) return false;
   return webAppsSkipReason() ?? false;
-}
-
-/**
- * Rewrite a stack-local URL for the Grid's browser. With a local Grid this is
- * the identity; with a remote Grid, FIDUCIA_E2E_PUBLIC_BASE_URL supplies the
- * origin the in-cluster browser can actually reach.
- */
-export function publicUrlFor(stackUrl) {
-  const override = process.env.FIDUCIA_E2E_PUBLIC_BASE_URL?.trim();
-  if (!override) return stackUrl;
-  const from = new URL(stackUrl);
-  const to = new URL(override);
-  from.protocol = to.protocol;
-  // Swap the HOSTNAME (e.g. 127.0.0.1 -> host.docker.internal for a local grid,
-  // or -> a tunnel host for a remote grid) while KEEPING the stack's dynamic
-  // port, unless the override pins one explicitly.
-  from.hostname = to.hostname;
-  if (to.port) from.port = to.port;
-  return from.toString();
 }
 
 /**
