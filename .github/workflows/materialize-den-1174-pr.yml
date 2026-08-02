@@ -1,0 +1,69 @@
+name: Materialize DEN-1174 from PR context
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+    branches: [main]
+    paths:
+      - .github/workflows/materialize-den-1174-pr.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: materialize-den-1174-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  materialize:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/den-1174-selenium-secure-origins'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: agent/den-1174-selenium-secure-origins
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Execute the exact reviewed materializer body
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          source = Path('.github/workflows/materialize-den-1174-public-origin-contract.yml').read_text(encoding='utf-8')
+          start = "          python3 - <<'PY'\n"
+          end = "\n          PY\n"
+          if source.count(start) != 1 or source.count(end) != 1:
+              raise SystemExit('reviewed materializer body markers are not unique')
+          body = source.split(start, 1)[1].split(end, 1)[0]
+          lines = body.splitlines()
+          if any(line and not line.startswith('          ') for line in lines):
+              raise SystemExit('unexpected materializer indentation')
+          code = '\n'.join(line[10:] if line else '' for line in lines) + '\n'
+          exec(compile(code, '<den-1174-materializer>', 'exec'), {})
+          PY
+
+          git rm \
+            .github/workflows/materialize-den-1174-public-origin-contract.yml \
+            .github/workflows/activate-den-1174-materializer.yml \
+            .github/workflows/materialize-den-1174-pr.yml
+          node --check src/browser.mjs
+          node --check src/browser-url.mjs
+          node --test tests/browser/browser-url.test.mjs
+          git diff --check
+          test "$(git diff --name-only | sort | paste -sd ' ' -)" = "docs/browser-automation.md src/browser-url.mjs src/browser.mjs tests/browser/browser-url.test.mjs"
+
+      - name: Commit the canonical product change
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add docs/browser-automation.md src/browser-url.mjs src/browser.mjs tests/browser/browser-url.test.mjs
+          git commit -m 'test(DEN-1174): harden remote browser origin rewriting'
+          git push origin HEAD:refs/heads/agent/den-1174-selenium-secure-origins
