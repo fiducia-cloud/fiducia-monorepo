@@ -24,6 +24,37 @@ function packageInstalled(name) {
   return existsSync(join(E2E_ROOT, "node_modules", name, "package.json"));
 }
 
+/**
+ * Normalize one browser-control or public-target origin. These values are often
+ * supplied by CI/tunnel configuration, so fail before a browser is launched if
+ * they contain credentials, paths, query strings, fragments, or a protocol the
+ * caller did not explicitly allow.
+ */
+export function normalizeBrowserOrigin(value, {
+  label = "browser origin",
+  protocols = ["http:", "https:"],
+} = {}) {
+  const raw = String(value ?? "").trim();
+  if (!raw) throw new Error(`${label} is empty`);
+
+  let url;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error(`${label} is not a valid URL`);
+  }
+  if (!protocols.includes(url.protocol)) {
+    throw new Error(`${label} must use ${protocols.join(" or ")}`);
+  }
+  if (url.username || url.password) {
+    throw new Error(`${label} must not contain credentials`);
+  }
+  if (url.pathname !== "/" || url.search || url.hash) {
+    throw new Error(`${label} must be an origin without a path, query, or fragment`);
+  }
+  return url.origin;
+}
+
 /** Why the browser suite cannot run here, or `false` if it can (node:test
  *  `{ skip }` shape — never null, which would skip yet still run hooks). */
 export function browserSkipReason({ requireStack = true } = {}) {
@@ -108,7 +139,7 @@ export async function launchPuppeteer() {
 // Chromium), the Selenium layer talks WebDriver to an EXISTING Selenium
 // Grid — e.g. the `selenium/standalone-chromium` server deployed in
 // ~/codes/ores/k8s-cluster (`dd-selenium-server`, Grid on :4444, pod-internal;
-// port-forward it locally: `kubectl port-forward svc/dd-selenium-server 4444`).
+// port-forward it locally: `kubectl port-forward deploy/dd-selenium-server 4444:4444`).
 //
 //   FIDUCIA_E2E_SELENIUM_URL   Grid endpoint (default http://localhost:4444;
 //                              SELENIUM_REMOTE_URL is honored as a fallback).
@@ -118,12 +149,14 @@ export async function launchPuppeteer() {
 //                              their target origin through this value.
 
 /** The Selenium Grid endpoint under test. */
-export function seleniumRemoteUrl() {
-  return (
-    process.env.FIDUCIA_E2E_SELENIUM_URL?.trim() ||
-    process.env.SELENIUM_REMOTE_URL?.trim() ||
-    "http://localhost:4444"
-  );
+export function seleniumRemoteUrl(value =
+  process.env.FIDUCIA_E2E_SELENIUM_URL?.trim() ||
+  process.env.SELENIUM_REMOTE_URL?.trim() ||
+  "http://localhost:4444") {
+  return normalizeBrowserOrigin(value, {
+    label: "Selenium Grid endpoint",
+    protocols: ["http:", "https:"],
+  });
 }
 
 /** Why the Selenium suite cannot run here, or `false` if it can. Reaches out
@@ -135,7 +168,12 @@ export async function seleniumSkipReason({ requireStack = true } = {}) {
   if (!packageInstalled("selenium-webdriver")) {
     return "selenium-webdriver is not installed (run npm ci from fiducia-e2e)";
   }
-  const grid = seleniumRemoteUrl();
+  let grid;
+  try {
+    grid = seleniumRemoteUrl();
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
   try {
     const res = await fetch(`${grid}/status`, { signal: AbortSignal.timeout(3_000) });
     const body = await res.json();
@@ -154,11 +192,19 @@ export async function seleniumSkipReason({ requireStack = true } = {}) {
  * the identity; with a remote Grid, FIDUCIA_E2E_PUBLIC_BASE_URL supplies the
  * origin the in-cluster browser can actually reach.
  */
-export function publicUrlFor(stackUrl) {
-  const override = process.env.FIDUCIA_E2E_PUBLIC_BASE_URL?.trim();
+export function publicUrlFor(
+  stackUrl,
+  override = process.env.FIDUCIA_E2E_PUBLIC_BASE_URL?.trim(),
+) {
   if (!override) return stackUrl;
   const from = new URL(stackUrl);
-  const to = new URL(override);
+  if (!["http:", "https:"].includes(from.protocol)) {
+    throw new Error("stack URL must use http: or https:");
+  }
+  const to = new URL(normalizeBrowserOrigin(override, {
+    label: "FIDUCIA_E2E_PUBLIC_BASE_URL",
+    protocols: ["http:", "https:"],
+  }));
   from.protocol = to.protocol;
   // Swap the HOSTNAME (e.g. 127.0.0.1 -> host.docker.internal for a local grid,
   // or -> a tunnel host for a remote grid) while KEEPING the stack's dynamic
