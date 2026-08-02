@@ -1,0 +1,105 @@
+name: selenium-grid
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/selenium-grid.yml"
+      - "docs/selenium-grid-contract.md"
+      - "package-lock.json"
+      - "package.json"
+      - "scripts/selenium-grid-smoke.mjs"
+      - "src/browser.mjs"
+      - "src/selenium-url.mjs"
+      - "tests/selenium-url.test.mjs"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/selenium-grid.yml"
+      - "docs/selenium-grid-contract.md"
+      - "package-lock.json"
+      - "package.json"
+      - "scripts/selenium-grid-smoke.mjs"
+      - "src/browser.mjs"
+      - "src/selenium-url.mjs"
+      - "tests/selenium-url.test.mjs"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: selenium-grid-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  remote-webdriver:
+    name: RemoteWebDriver contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      selenium:
+        # Grid 4.27.0 / Chromium 131, matching the deployed k8s-cluster stack.
+        # Digest captured from the successful hosted proof for PR #9.
+        image: selenium/standalone-chromium@sha256:29fef1e6cd5eca4ccad32d399d3b6177c44305ea31d59f18dff7500ea7d03809
+        ports:
+          - 4444:4444
+        options: >-
+          --shm-size=2g
+    env:
+      FIDUCIA_E2E_SELENIUM_URL: http://127.0.0.1:4444
+      FIDUCIA_E2E_ARTIFACT_DIR: artifacts/selenium-grid
+    steps:
+      - name: Check out E2E suite
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          path: fiducia-e2e
+
+      - name: Validate this workflow
+        uses: docker://rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
+        with:
+          args: fiducia-e2e/.github/workflows/selenium-grid.yml
+
+      - name: Check out the local package dependency
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          repository: fiducia-cloud/fiducia-test-config
+          ref: 825220281fdc16bbf47a035177001d2fe29bdabf
+          path: fiducia-test-config
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22.22.1"
+          cache: npm
+          cache-dependency-path: fiducia-e2e/package-lock.json
+
+      - name: Install locked dependencies without lifecycle scripts
+        working-directory: fiducia-e2e
+        run: npm ci --ignore-scripts
+
+      - name: Parse every source, test, and script
+        working-directory: fiducia-e2e
+        run: npm run lint
+
+      - name: Validate Selenium endpoint contracts
+        working-directory: fiducia-e2e
+        run: node --test tests/selenium-url.test.mjs
+
+      - name: Create a real RemoteWebDriver Chromium session
+        working-directory: fiducia-e2e
+        run: npm run test:selenium-grid
+
+      - name: Audit dependencies
+        working-directory: fiducia-e2e
+        run: npm audit --audit-level=high
+
+      - name: Upload Selenium evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fiducia-selenium-grid-proof
+          path: fiducia-e2e/artifacts/selenium-grid/
+          if-no-files-found: error
+          retention-days: 14
