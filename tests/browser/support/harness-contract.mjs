@@ -81,6 +81,12 @@ export async function startHarnessServer() {
       return;
     }
 
+    if (url.pathname === '/favicon.ico') {
+      response.statusCode = 204;
+      response.end();
+      return;
+    }
+
     if (url.pathname === '/healthz') {
       response.statusCode = 200;
       response.setHeader('Content-Type', 'text/plain; charset=utf-8');
