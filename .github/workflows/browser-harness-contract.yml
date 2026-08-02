@@ -1,0 +1,86 @@
+name: Browser harness contract
+
+'on':
+  pull_request:
+    paths:
+      - 'tests/browser/**'
+      - '.github/workflows/browser-harness-contract.yml'
+  push:
+    branches: [main, master, dev]
+    paths:
+      - 'tests/browser/**'
+      - '.github/workflows/browser-harness-contract.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: browser-harness-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    name: ${{ matrix.framework }} contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        framework: [playwright, puppeteer, selenium]
+    env:
+      CI: 'true'
+      E2E_BROWSER_CONTRACT: '1'
+      npm_config_audit: 'false'
+      npm_config_fund: 'false'
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install isolated browser driver
+        shell: bash
+        working-directory: tests/browser
+        run: |
+          set -euo pipefail
+          if [[ ! -f package.json ]]; then
+            printf '%s\n' '{"private":true,"type":"module"}' > package.json
+          fi
+          case "${{ matrix.framework }}" in
+            playwright)
+              npm install --no-save --no-package-lock playwright@1.61.1
+              npx playwright install --with-deps chromium
+              ;;
+            puppeteer)
+              npm install --no-save --no-package-lock puppeteer@25.3.0
+              ;;
+            selenium)
+              npm install --no-save --no-package-lock selenium-webdriver@4.46.0
+              google-chrome --version
+              ;;
+            *)
+              echo "unsupported framework: ${{ matrix.framework }}" >&2
+              exit 64
+              ;;
+          esac
+
+      - name: Run browser harness contract
+        shell: bash
+        working-directory: tests/browser
+        run: node --test "${{ matrix.framework }}/harness-contract.test.mjs"
+
+      - name: Upload browser artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-harness-${{ matrix.framework }}-${{ github.run_attempt }}
+          path: tests/browser/artifacts/${{ matrix.framework }}/
+          if-no-files-found: ignore
+          retention-days: 7
