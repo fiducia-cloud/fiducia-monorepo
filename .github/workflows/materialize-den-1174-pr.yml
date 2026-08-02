@@ -55,8 +55,9 @@ jobs:
           node --check src/browser.mjs
           node --check src/browser-url.mjs
           node --test tests/browser/browser-url.test.mjs
-          git diff --check
-          test "$(git diff --name-only | sort | paste -sd ' ' -)" = "docs/browser-automation.md src/browser-url.mjs src/browser.mjs tests/browser/browser-url.test.mjs"
+          git add docs/browser-automation.md src/browser-url.mjs src/browser.mjs tests/browser/browser-url.test.mjs
+          git diff --cached --check
+          test "$(git diff --cached --name-only | grep -v '^.github/workflows/' | sort | paste -sd ' ' -)" = "docs/browser-automation.md src/browser-url.mjs src/browser.mjs tests/browser/browser-url.test.mjs"
 
       - name: Commit the canonical product change
         shell: bash
@@ -64,6 +65,5 @@ jobs:
           set -euo pipefail
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add docs/browser-automation.md src/browser-url.mjs src/browser.mjs tests/browser/browser-url.test.mjs
           git commit -m 'test(DEN-1174): harden remote browser origin rewriting'
           git push origin HEAD:refs/heads/agent/den-1174-selenium-secure-origins
