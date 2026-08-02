@@ -18,7 +18,9 @@ import { fileURLToPath } from "node:url";
 
 import { webAppsSkipReason } from "./webapps.mjs";
 import { publicUrlFor } from "./browser-url.mjs";
+import { seleniumRemoteUrl } from "./selenium-url.mjs";
 export { publicUrlFor } from "./browser-url.mjs";
+export { seleniumRemoteUrl } from "./selenium-url.mjs";
 
 const E2E_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -110,7 +112,7 @@ export async function launchPuppeteer() {
 // Chromium), the Selenium layer talks WebDriver to an EXISTING Selenium
 // Grid — e.g. the `selenium/standalone-chromium` server deployed in
 // ~/codes/ores/k8s-cluster (`dd-selenium-server`, Grid on :4444, pod-internal;
-// port-forward it locally: `kubectl port-forward svc/dd-selenium-server 4444`).
+// port-forward it locally: `kubectl port-forward deploy/dd-selenium-server 4444:4444`).
 //
 //   FIDUCIA_E2E_SELENIUM_URL   Grid endpoint (default http://localhost:4444;
 //                              SELENIUM_REMOTE_URL is honored as a fallback).
@@ -118,15 +120,6 @@ export async function launchPuppeteer() {
 //                              remotely (in-cluster), its browser cannot reach
 //                              the runner's 127.0.0.1 stack, so tests rewrite
 //                              their target origin through this value.
-
-/** The Selenium Grid endpoint under test. */
-export function seleniumRemoteUrl() {
-  return (
-    process.env.FIDUCIA_E2E_SELENIUM_URL?.trim() ||
-    process.env.SELENIUM_REMOTE_URL?.trim() ||
-    "http://localhost:4444"
-  );
-}
 
 /** Why the Selenium suite cannot run here, or `false` if it can. Reaches out
  *  to the Grid's /status once so an absent server skips instead of failing. */
@@ -137,7 +130,12 @@ export async function seleniumSkipReason({ requireStack = true } = {}) {
   if (!packageInstalled("selenium-webdriver")) {
     return "selenium-webdriver is not installed (run npm ci from fiducia-e2e)";
   }
-  const grid = seleniumRemoteUrl();
+  let grid;
+  try {
+    grid = seleniumRemoteUrl();
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
   try {
     const res = await fetch(`${grid}/status`, { signal: AbortSignal.timeout(3_000) });
     const body = await res.json();
