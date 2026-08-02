@@ -1,0 +1,195 @@
+name: Materialize DEN-1174 public origin contract
+
+on:
+  push:
+    branches:
+      - agent/den-1174-selenium-secure-origins
+    paths:
+      - .github/workflows/materialize-den-1174-public-origin-contract.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: materialize-den-1174-public-origin-contract
+  cancel-in-progress: false
+
+jobs:
+  materialize:
+    if: github.actor == 'ORESoftware'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: agent/den-1174-selenium-secure-origins
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Materialize the reviewed browser-origin contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          browser = Path('src/browser.mjs')
+          text = browser.read_text(encoding='utf-8')
+
+          import_anchor = 'import { webAppsSkipReason } from "./webapps.mjs";\n'
+          import_replacement = (
+              import_anchor
+              + 'import { publicUrlFor } from "./browser-url.mjs";\n'
+              + 'export { publicUrlFor } from "./browser-url.mjs";\n'
+          )
+          if text.count(import_anchor) != 1:
+              raise SystemExit('browser import anchor did not match exactly once')
+          text = text.replace(import_anchor, import_replacement, 1)
+
+          old_helper = '''/**
+           * Rewrite a stack-local URL for the Grid's browser. With a local Grid this is
+           * the identity; with a remote Grid, FIDUCIA_E2E_PUBLIC_BASE_URL supplies the
+           * origin the in-cluster browser can actually reach.
+           */
+          export function publicUrlFor(stackUrl) {
+            const override = process.env.FIDUCIA_E2E_PUBLIC_BASE_URL?.trim();
+            if (!override) return stackUrl;
+            const from = new URL(stackUrl);
+            const to = new URL(override);
+            from.protocol = to.protocol;
+            // Swap the HOSTNAME (e.g. 127.0.0.1 -> host.docker.internal for a local grid,
+            // or -> a tunnel host for a remote grid) while KEEPING the stack's dynamic
+            // port, unless the override pins one explicitly.
+            from.hostname = to.hostname;
+            if (to.port) from.port = to.port;
+            return from.toString();
+          }
+
+          '''
+          if text.count(old_helper) != 1:
+              raise SystemExit('publicUrlFor block did not match exactly once')
+          text = text.replace(old_helper, '', 1)
+          browser.write_text(text, encoding='utf-8')
+
+          Path('src/browser-url.mjs').write_text('''// Pure URL contract for remote-browser routing. Kept separate from browser.mjs
+          // so the rules can be unit-tested without installing browser drivers or booting
+          // the heavyweight composed Rust/Postgres stack.
+
+          function publicBaseUrl(raw) {
+            if (raw === undefined || raw === null || String(raw).trim() === "") return null;
+            let url;
+            try {
+              url = new URL(String(raw).trim());
+            } catch (error) {
+              throw new TypeError(`FIDUCIA_E2E_PUBLIC_BASE_URL must be an absolute HTTP(S) origin: ${error.message}`);
+            }
+            if (url.protocol !== "http:" && url.protocol !== "https:") {
+              throw new TypeError("FIDUCIA_E2E_PUBLIC_BASE_URL must use http: or https:");
+            }
+            if (url.username || url.password) {
+              throw new TypeError("FIDUCIA_E2E_PUBLIC_BASE_URL must not contain credentials");
+            }
+            if (url.pathname !== "/" || url.search || url.hash) {
+              throw new TypeError("FIDUCIA_E2E_PUBLIC_BASE_URL must be an origin only (no path, query, or fragment)");
+            }
+            return url;
+          }
+
+          /**
+           * Rewrite a stack-local HTTP(S) URL for a remote browser. The override may
+           * replace protocol and hostname while the stack's allocated port remains
+           * authoritative unless the override explicitly pins one.
+           */
+          export function publicUrlFor(
+            stackUrl,
+            override = process.env.FIDUCIA_E2E_PUBLIC_BASE_URL,
+          ) {
+            const target = new URL(stackUrl);
+            if (target.protocol !== "http:" && target.protocol !== "https:") {
+              throw new TypeError("stackUrl must use http: or https:");
+            }
+            const publicBase = publicBaseUrl(override);
+            if (!publicBase) return stackUrl;
+            target.protocol = publicBase.protocol;
+            target.hostname = publicBase.hostname;
+            if (publicBase.port) target.port = publicBase.port;
+            return target.toString();
+          }
+          ''', encoding='utf-8')
+
+          Path('tests/browser/browser-url.test.mjs').write_text('''import assert from "node:assert/strict";
+          import test from "node:test";
+
+          import { publicUrlFor } from "../../src/browser-url.mjs";
+
+          test("publicUrlFor is identity when no public origin is configured", () => {
+            const local = "http://127.0.0.1:19421/login?next=%2Fapp#top";
+            assert.equal(publicUrlFor(local, undefined), local);
+          });
+
+          test("publicUrlFor swaps protocol and hostname but preserves an allocated port", () => {
+            assert.equal(
+              publicUrlFor("http://127.0.0.1:19421/login?next=%2Fapp", "http://host.docker.internal"),
+              "http://host.docker.internal:19421/login?next=%2Fapp",
+            );
+          });
+
+          test("an explicitly pinned public port overrides the stack port", () => {
+            assert.equal(
+              publicUrlFor("http://127.0.0.1:19421/app", "https://grid-tunnel.example.test:8443"),
+              "https://grid-tunnel.example.test:8443/app",
+            );
+          });
+
+          for (const [label, value] of [
+            ["credentials", "http://user:secret@grid.example.test"],
+            ["path", "http://grid.example.test/base"],
+            ["query", "http://grid.example.test/?tenant=one"],
+            ["fragment", "http://grid.example.test/#test"],
+            ["non-web scheme", "file:///tmp/browser"],
+            ["relative value", "grid.example.test"],
+          ]) {
+            test(`public origin rejects ${label}`, () => {
+              assert.throws(
+                () => publicUrlFor("http://127.0.0.1:19421/app", value),
+                /FIDUCIA_E2E_PUBLIC_BASE_URL/,
+              );
+            });
+          }
+
+          test("stack URL rejects non-web schemes even without an override", () => {
+            assert.throws(() => publicUrlFor("file:///tmp/app", undefined), /stackUrl/);
+          });
+          ''', encoding='utf-8')
+
+          docs = Path('docs/browser-automation.md')
+          docs_text = docs.read_text(encoding='utf-8')
+          old_row = '| `FIDUCIA_E2E_PUBLIC_BASE_URL` | when the Grid runs remotely (in-cluster), its browser cannot reach the runner\'s `127.0.0.1` stack; this rewrites the target origin to one the Grid can reach |'
+          new_row = '| `FIDUCIA_E2E_PUBLIC_BASE_URL` | origin-only HTTP(S) base used when a remote Grid cannot reach the runner\'s `127.0.0.1` stack; protocol/hostname are replaced and a dynamic stack port is preserved unless this value pins a port |'
+          if docs_text.count(old_row) != 1:
+              raise SystemExit('browser docs environment row did not match exactly once')
+          docs_text = docs_text.replace(old_row, new_row, 1)
+          docs_text = docs_text.replace(
+              '`seleniumSkipReason()` probes the Grid\'s `/status` once — an **unreachable Grid',
+              '`FIDUCIA_E2E_PUBLIC_BASE_URL` is validated as an origin, not a general URL: credentials, paths, queries, fragments, relative values, and non-HTTP(S) schemes fail before a browser session is used.\n\n`seleniumSkipReason()` probes the Grid\'s `/status` once — an **unreachable Grid',
+              1,
+          )
+          docs.write_text(docs_text, encoding='utf-8')
+          PY
+
+          git rm .github/workflows/materialize-den-1174-public-origin-contract.yml
+          node --check src/browser.mjs
+          node --check src/browser-url.mjs
+          node --test tests/browser/browser-url.test.mjs
+          git diff --check
+          test "$(git diff --name-only | sort | paste -sd ' ' -)" = "docs/browser-automation.md src/browser-url.mjs src/browser.mjs tests/browser/browser-url.test.mjs"
+
+      - name: Commit the canonical product change
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add docs/browser-automation.md src/browser-url.mjs src/browser.mjs tests/browser/browser-url.test.mjs
+          git commit -m 'test(DEN-1174): harden remote browser origin rewriting'
+          git push origin HEAD:refs/heads/agent/den-1174-selenium-secure-origins
