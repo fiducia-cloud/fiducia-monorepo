@@ -1,0 +1,78 @@
+name: upstream-contracts
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/upstream-contracts.yml"
+      - "contracts/upstream-lock.json"
+      - "scripts/check-upstream-contracts.mjs"
+      - "src/client.mjs"
+  pull_request:
+    paths:
+      - ".github/workflows/upstream-contracts.yml"
+      - "contracts/upstream-lock.json"
+      - "scripts/check-upstream-contracts.mjs"
+      - "src/client.mjs"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract-chain:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          path: fiducia-e2e
+      - name: Validate workflow syntax
+        uses: docker://rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
+        with:
+          args: fiducia-e2e/.github/workflows/upstream-contracts.yml
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          repository: fiducia-cloud/fiducia-interfaces
+          ref: 0e3dca3f70d61ac94a8904969c5dcd1868321aec
+          path: fiducia-interfaces
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          repository: fiducia-cloud/fiducia-clients
+          ref: af059789577b09d150b7846cfdbd64ee7c8976af
+          path: fiducia-clients
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          repository: fiducia-cloud/fiducia-sync
+          ref: 4ae9a6d816ade78ed6af2b7b90bffc5b83683926
+          path: fiducia-sync
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22.22.1"
+          cache: npm
+          cache-dependency-path: fiducia-clients/clients/ts/package-lock.json
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Install the exact TypeScript client toolchain
+        working-directory: fiducia-clients/clients/ts
+        run: npm ci --ignore-scripts
+      - name: Validate the contract-chain checker
+        working-directory: fiducia-e2e
+        run: node --check scripts/check-upstream-contracts.mjs
+      - name: Verify exact upstream interoperability
+        working-directory: fiducia-e2e
+        env:
+          FIDUCIA_UPSTREAM_ROOT: ${{ github.workspace }}
+        run: node scripts/check-upstream-contracts.mjs
+      - name: Audit the TypeScript client dependency graph
+        working-directory: fiducia-clients/clients/ts
+        run: npm audit --audit-level=high

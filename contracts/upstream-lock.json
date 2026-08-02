@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "repositories": {
+    "fiducia-interfaces": {
+      "repository": "fiducia-cloud/fiducia-interfaces",
+      "sha": "0e3dca3f70d61ac94a8904969c5dcd1868321aec"
+    },
+    "fiducia-clients": {
+      "repository": "fiducia-cloud/fiducia-clients",
+      "sha": "af059789577b09d150b7846cfdbd64ee7c8976af"
+    },
+    "fiducia-sync": {
+      "repository": "fiducia-cloud/fiducia-sync",
+      "sha": "4ae9a6d816ade78ed6af2b7b90bffc5b83683926"
+    }
+  }
+}
