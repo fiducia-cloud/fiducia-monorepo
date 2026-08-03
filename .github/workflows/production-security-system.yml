@@ -11,6 +11,7 @@ on:
       - "tests/helpers.mjs"
       - "tests/system/security-boundaries.test.mjs"
       - "tests/system/kv-isolation.test.mjs"
+      - "tests/system/plaintext-policy.test.mjs"
   push:
     branches: [main]
     paths:
@@ -22,6 +23,7 @@ on:
       - "tests/helpers.mjs"
       - "tests/system/security-boundaries.test.mjs"
       - "tests/system/kv-isolation.test.mjs"
+      - "tests/system/plaintext-policy.test.mjs"
   workflow_dispatch:
 
 permissions:
@@ -33,7 +35,7 @@ concurrency:
 
 jobs:
   tenant-and-trust-boundaries:
-    name: AUTH-001 / AUTH-002 / AUTH-007 / KV-002 / KV-004 real-process proof
+    name: AUTH-001 / AUTH-002 / AUTH-007 / KV-001 / KV-002 / KV-004 real-process proof
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -72,12 +74,12 @@ jobs:
           ref: 6081bc3f3b7cbe0312870968b61acc38ca91c66a
           path: fiducia-interfaces
 
-      - name: Check out the production node candidate
+      - name: Check out the DEN-1244 production node candidate
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           repository: fiducia-cloud/fiducia-node.rs
-          ref: 63b5bc3ab79e68547d794255a35a4a64f7b1becb
+          ref: 06bbda3efd18d1e791bf933047f6baf28984959e
           path: fiducia-node.rs
 
       - name: Check out the production load-balancer candidate
@@ -97,6 +99,12 @@ jobs:
       - name: Install the pinned Rust toolchain
         run: rustup toolchain install 1.95.0 --profile minimal
 
+      - name: Run the DEN-1244 node policy unit test
+        run: >-
+          cargo +1.95.0 test --locked
+          --manifest-path fiducia-node.rs/Cargo.toml
+          plaintext_write_requires_exact_admin_scope_and_non_secret_keyspace
+
       - name: Install locked JavaScript dependencies without lifecycle scripts
         working-directory: fiducia-e2e
         run: npm ci --ignore-scripts
@@ -105,7 +113,7 @@ jobs:
         working-directory: fiducia-e2e
         run: npm run lint
 
-      - name: Run DEN-1391 tenant, trusted-hop, KV, and secret-boundary proof
+      - name: Run DEN-1391 tenant, trusted-hop, plaintext, KV, and secret-boundary proof
         working-directory: fiducia-e2e
         run: npm run test:system:security
 
