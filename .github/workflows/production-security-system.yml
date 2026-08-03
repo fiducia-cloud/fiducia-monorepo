@@ -10,6 +10,7 @@ on:
       - "src/coordination.mjs"
       - "tests/helpers.mjs"
       - "tests/system/security-boundaries.test.mjs"
+      - "tests/system/kv-isolation.test.mjs"
   push:
     branches: [main]
     paths:
@@ -20,6 +21,7 @@ on:
       - "src/coordination.mjs"
       - "tests/helpers.mjs"
       - "tests/system/security-boundaries.test.mjs"
+      - "tests/system/kv-isolation.test.mjs"
   workflow_dispatch:
 
 permissions:
@@ -31,7 +33,7 @@ concurrency:
 
 jobs:
   tenant-and-trust-boundaries:
-    name: AUTH-001 / AUTH-002 / AUTH-007 real-process proof
+    name: AUTH-001 / AUTH-002 / AUTH-007 / KV-002 / KV-004 real-process proof
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -103,7 +105,7 @@ jobs:
         working-directory: fiducia-e2e
         run: npm run lint
 
-      - name: Run DEN-1391 tenant and trusted-hop boundary proof
+      - name: Run DEN-1391 tenant, trusted-hop, KV, and secret-boundary proof
         working-directory: fiducia-e2e
         run: npm run test:system:security
 
