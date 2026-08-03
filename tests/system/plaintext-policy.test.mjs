@@ -8,6 +8,7 @@
 // canaries. Exact production PVC/snapshot/log inspection remains a later live
 // evidence requirement.
 
+import { request as httpRequest } from "node:http";
 import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { setTimeout as delay } from "node:timers/promises";
@@ -78,12 +79,78 @@ async function rawPlaintextPut(stack, { key, value, scopes }) {
   });
 }
 
+function rawHttp(url, { method = "GET", headers = {}, body = "" } = {}) {
+  return new Promise((resolvePromise, rejectPromise) => {
+    const request = httpRequest(
+      url,
+      {
+        method,
+        headers,
+        signal: AbortSignal.timeout(5_000),
+      },
+      (response) => {
+        const chunks = [];
+        response.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+        response.on("error", rejectPromise);
+        response.on("end", () => {
+          resolvePromise({
+            status: response.statusCode ?? 0,
+            headers: response.headers,
+            body: Buffer.concat(chunks).toString("utf8"),
+          });
+        });
+      },
+    );
+    request.on("error", rejectPromise);
+    request.end(body);
+  });
+}
+
+async function rawDuplicateScopeRequest(
+  stack,
+  { path, method = "GET", scopeValues, body },
+) {
+  assert.equal(scopeValues.length, 2, "duplicate-scope proof requires exactly two lines");
+  const serialized = body === undefined ? "" : JSON.stringify(body);
+  const headers = {
+    [EDGE_AUTH_HEADER]: INTERNAL_SECRET,
+    [ORG_HEADER]: ORG,
+    // Node's HTTP client emits one field line per array element for custom
+    // headers. This intentionally exercises duplicate wire-level fields rather
+    // than a comma-joined value.
+    [SCOPES_HEADER]: scopeValues,
+    connection: "close",
+  };
+  if (serialized) {
+    headers["content-type"] = "application/json";
+    headers["content-length"] = String(Buffer.byteLength(serialized));
+  }
+  return rawHttp(new URL(path, stack.lbUrl), {
+    method,
+    headers,
+    body: serialized,
+  });
+}
+
 async function settledPlaintextPut(stack, request, label) {
   return eventually(
     async () => {
       const response = await rawPlaintextPut(stack, request);
       if (response.status === 502 || response.status === 503) {
         await response.arrayBuffer();
+        throw new Error(`transient route status ${response.status}`);
+      }
+      return response;
+    },
+    { timeoutMs: 60_000, label },
+  );
+}
+
+async function settledDuplicateScopePlaintextPut(stack, request, label) {
+  return eventually(
+    async () => {
+      const response = await rawDuplicateScopeRequest(stack, request);
+      if (response.status === 502 || response.status === 503) {
         throw new Error(`transient route status ${response.status}`);
       }
       return response;
@@ -217,6 +284,64 @@ describe(
 
         await assertPlaintextDenied(response, canary, "admin secret plaintext write");
         await assertKvMissing(ordinary, key, "admin secret plaintext write");
+      },
+    );
+
+    it(
+      "KV-001 / AUTH-007: duplicate trusted scopes fail at the LB and cannot persist plaintext",
+      { timeout: 180_000 },
+      async () => {
+        const uniqueAdmin = await fetch(`${stack.lbUrl}/_lb/routes`, {
+          headers: trustedHeaders(ORG, "admin:write"),
+          signal: AbortSignal.timeout(5_000),
+        });
+        assert.equal(uniqueAdmin.status, 200, "unique admin scope must reach the LB operator route");
+        await uniqueAdmin.arrayBuffer();
+
+        const duplicateOperator = await rawDuplicateScopeRequest(stack, {
+          path: "/_lb/routes",
+          scopeValues: ["admin:write", "admin:write"],
+        });
+        assert.equal(
+          duplicateOperator.status,
+          403,
+          "identical duplicate admin scope lines must not create an operator identity",
+        );
+        assert.equal(JSON.parse(duplicateOperator.body)?.error, "insufficient_scope");
+
+        const key = uniqueKey("duplicate-scope-plaintext-denied");
+        const canary = uniqueId("duplicate-scope-plaintext-canary");
+        const response = await settledDuplicateScopePlaintextPut(
+          stack,
+          {
+            path: `/v1/kv?key=${encodeURIComponent(key)}`,
+            method: "PUT",
+            scopeValues: [
+              "kv:write admin:write",
+              "admin:write kv:write",
+            ],
+            body: { value: canary, plaintext: true },
+          },
+          "duplicate trusted scopes plaintext denial",
+        );
+
+        assert.ok(
+          response.status < 200 || response.status >= 300,
+          `duplicate trusted scopes unexpectedly produced HTTP ${response.status}`,
+        );
+        assert.equal(response.headers.location, undefined, "denial must not redirect");
+        assert.ok(
+          !response.body.includes(canary),
+          "duplicate-scope denial echoed the submitted plaintext canary",
+        );
+        await assertKvMissing(ordinary, key, "duplicate trusted scopes plaintext write");
+
+        for (const source of ["lb", 0, 1, 2]) {
+          assert.ok(
+            !stack.logsOf(source).includes(canary),
+            `duplicate-scope canary leaked into ${source === "lb" ? "LB" : `node ${source}`} logs`,
+          );
+        }
       },
     );
   },
