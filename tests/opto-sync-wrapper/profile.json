@@ -2,6 +2,7 @@
   "schemaVersion": 1,
   "repository": "fiducia-cloud/fiducia-e2e",
   "syncRepository": "fiducia-cloud/fiducia-sync",
+  "syncRef": "agent/den-1387-opto-sync-zed-adapter",
   "syncPullRequest": 17,
   "rolloutIssue": "DEN-1387",
   "releaseGates": ["DEN-309", "DEN-363"],
