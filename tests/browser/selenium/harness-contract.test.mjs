@@ -1,17 +1,25 @@
 import assert from 'node:assert/strict';
-import { writeFile } from 'node:fs/promises';
 import test from 'node:test';
 import {
+  assertInPageBoundaries,
+  assertNoBrowserErrors,
   contractEnabled,
-  screenshotPath,
   startHarnessServer,
+  writeArtifact,
 } from '../support/harness-contract.mjs';
 
 test('Selenium satisfies the browser harness contract', { skip: !contractEnabled, timeout: 45_000 }, async () => {
-  const [{ Builder, By, until }, { default: chrome }] = await Promise.all([
+  const [webdriver, chromeModule, loggingModule] = await Promise.all([
     import('selenium-webdriver'),
     import('selenium-webdriver/chrome.js'),
+    import('selenium-webdriver/lib/logging.js'),
   ]);
+  const { Builder, By, until } = webdriver;
+  const chrome = chromeModule.default ?? chromeModule;
+  const logging = loggingModule.default ?? loggingModule;
+  const preferences = new logging.Preferences();
+  preferences.setLevel(logging.Type.BROWSER, logging.Level.ALL);
+
   const harness = await startHarnessServer();
   const options = new chrome.Options();
   options.addArguments(
@@ -21,9 +29,17 @@ test('Selenium satisfies the browser harness contract', { skip: !contractEnabled
     '--disable-dev-shm-usage',
     '--window-size=1280,720',
   );
-  const driver = await new Builder().forBrowser('chrome').setChromeOptions(options).build();
+
+  let driver;
+  let testError;
+  const browserErrors = [];
 
   try {
+    driver = await new Builder()
+      .forBrowser('chrome')
+      .setLoggingPrefs(preferences)
+      .setChromeOptions(options)
+      .build();
     await driver.manage().setTimeouts({ implicit: 0, pageLoad: 15_000, script: 15_000 });
     await driver.get(harness.origin);
     const state = await driver.wait(until.elementLocated(By.id('state')), 10_000);
@@ -33,15 +49,37 @@ test('Selenium satisfies the browser harness contract', { skip: !contractEnabled
     await increment.click();
     await increment.click();
     assert.equal(await driver.findElement(By.id('count')).getText(), '2');
-    assert.equal(await driver.executeScript('return document.cookie'), '', 'HttpOnly cookie leaked into document.cookie');
-    const health = await driver.executeAsyncScript(`
-      const done = arguments[arguments.length - 1];
-      fetch('/healthz').then((response) => response.text()).then(done, (error) => done('ERROR:' + error.message));
-    `);
-    assert.equal(health, 'ok');
-    await writeFile(await screenshotPath('selenium'), await driver.takeScreenshot(), 'base64');
+    await assertInPageBoundaries((fn) =>
+      driver.executeAsyncScript(`
+        const done = arguments[arguments.length - 1];
+        (${fn.toString()})().then(done, (error) => done({ contractError: error.message }));
+      `),
+    );
+  } catch (error) {
+    testError = error;
   } finally {
-    await driver.quit().catch(() => {});
+    if (driver) {
+      const entries = await driver.manage().logs().get(logging.Type.BROWSER).catch((error) => {
+        browserErrors.push(`webdriver-log: ${error.message}`);
+        return [];
+      });
+      browserErrors.push(
+        ...entries
+          .filter((entry) => entry.level.value >= logging.Level.SEVERE.value)
+          .map((entry) => `${entry.level.name}: ${entry.message}`),
+      );
+      await Promise.allSettled([
+        driver.takeScreenshot().then((png) => writeArtifact('selenium', 'harness-contract.png', png, 'base64')),
+        driver.getPageSource().then((source) => writeArtifact('selenium', 'page.html', source)),
+        writeArtifact('selenium', 'browser-errors.json', JSON.stringify(browserErrors, null, 2)),
+      ]);
+      await driver.quit().catch(() => {});
+    } else {
+      await writeArtifact('selenium', 'browser-errors.json', JSON.stringify(browserErrors, null, 2));
+    }
     await harness.close();
   }
+
+  if (testError) throw testError;
+  assertNoBrowserErrors(browserErrors);
 });
