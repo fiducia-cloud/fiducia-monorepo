@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "repository": "fiducia-cloud/fiducia-e2e",
+  "syncRepository": "fiducia-cloud/fiducia-sync",
+  "syncPullRequest": 17,
+  "rolloutIssue": "DEN-1387",
+  "releaseGates": ["DEN-309", "DEN-363"],
+  "releaseState": "blocked-until-certified-package-published",
+  "dependency": {"package": "opto-sync/opto-sync-clients", "range": "^0.2.0"},
+  "collections": ["infra_operations", "customer_state", "admin_state", "coordination_metadata"],
+  "persistence": {"web": ["indexeddb"], "mobile": ["sqlite"], "backend": ["postgres", "supabase"]},
+  "writeStrategies": ["queuedOptimistic", "remoteConfirmed"],
+  "requiredScenarios": ["real-browser-indexeddb-wasm", "durable-restart", "optimistic-rebase-no-flicker", "remote-confirmed-no-premature-view", "stable-mutation-id-replay", "stale-base-conflict", "tombstone-no-resurrection", "postgres-supabase-authority", "realtime-is-wake-hint"],
+  "domainGuards": [
+    "customer and admin planes use separate IndexedDB or SQLite databases, Supabase URLs, clients, credentials, and cursors",
+    "tenant authorization, shared-auth exchange, RLS, and RPC mapping remain Fiducia-owned",
+    "local-queue, optimistic, and remote-confirmed operation policy plus outcome observability stay above opto-sync"
+  ]
+}
