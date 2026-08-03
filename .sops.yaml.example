@@ -1,0 +1,12 @@
+{
+  "creation_rules": [
+    {
+      "path_regex": "^secrets/customer/[^/]+\\.sops\\.env$",
+      "age": "${FIDUCIA_CUSTOMER_AGE_RECIPIENT}"
+    },
+    {
+      "path_regex": "^secrets/admin/[^/]+\\.sops\\.env$",
+      "age": "${FIDUCIA_ADMIN_AGE_RECIPIENT}"
+    }
+  ]
+}
