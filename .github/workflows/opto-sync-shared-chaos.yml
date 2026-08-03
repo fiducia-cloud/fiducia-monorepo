@@ -21,7 +21,7 @@ permissions:
 
 jobs:
   chaos:
-    uses: opto-sync/opto-sync-e2e/.github/workflows/downstream-chaos-reusable.yml@dcf5ee5d15e4ed6aeb24952b296947b4ffb39e88
+    uses: opto-sync/opto-sync-e2e/.github/workflows/downstream-chaos-reusable.yml@a577f040b90bb2f6dbcbec5a02cfb6a82a411356
     with:
       profile_path: tests/opto-sync-wrapper/profile.json
       product_test_path: tests/opto-sync-wrapper/product.e2e.test.mjs
