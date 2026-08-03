@@ -9,7 +9,7 @@
     "test:conformance": "node --test 'tests/conformance/**/*.test.mjs'",
     "test:chaos": "node --test 'tests/chaos/**/*.test.mjs'",
     "test:system": "FIDUCIA_E2E_SYSTEM=1 FIDUCIA_E2E_ALLOW_INSECURE_LOCALHOST=1 node --test --test-concurrency=1 'tests/system/**/*.test.mjs'",
-    "test:system:security": "FIDUCIA_E2E_SYSTEM=1 FIDUCIA_E2E_ALLOW_INSECURE_LOCALHOST=1 node --test --test-concurrency=1 'tests/system/security-boundaries.test.mjs'",
+    "test:system:security": "FIDUCIA_E2E_SYSTEM=1 FIDUCIA_E2E_ALLOW_INSECURE_LOCALHOST=1 node --test --test-concurrency=1 'tests/system/security-boundaries.test.mjs' 'tests/system/kv-isolation.test.mjs'",
     "test:multicluster": "FIDUCIA_E2E_MULTICLUSTER=1 FIDUCIA_E2E_ALLOW_INSECURE_LOCALHOST=1 node --test 'tests/multicluster/**/*.test.mjs'",
     "test:webapps": "FIDUCIA_E2E_WEBAPPS=1 node --test 'tests/webapps/**/*.test.mjs'",
     "test:browser": "FIDUCIA_E2E_BROWSER=1 FIDUCIA_E2E_WEBAPPS=1 node --test --test-concurrency=1 'tests/browser/**/*.test.mjs'",
