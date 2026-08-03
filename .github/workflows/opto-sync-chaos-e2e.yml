@@ -1,0 +1,32 @@
+name: opto-sync chaos e2e
+
+on:
+  pull_request:
+    paths:
+      - 'tests/opto-sync-wrapper/profile.json'
+      - '.github/workflows/opto-sync-chaos-e2e.yml'
+  workflow_dispatch:
+    inputs:
+      live_e2e:
+        description: Run frozen SDK, native, real Chromium, and downstream chaos tests
+        required: true
+        default: false
+        type: boolean
+      wrapper_ref:
+        description: Optional matching sync-wrapper branch, tag, or immutable commit
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  chaos:
+    uses: opto-sync/opto-sync-e2e/.github/workflows/downstream-chaos-reusable.yml@9b30b37397afd3552c19e7c6340f0728b73189d4
+    with:
+      profile_path: tests/opto-sync-wrapper/profile.json
+      live_e2e: ${{ github.event_name == 'workflow_dispatch' && inputs.live_e2e }}
+      wrapper_ref: ${{ inputs.wrapper_ref }}
+    secrets:
+      SYNC_FLEET_TOKEN: ${{ secrets.SYNC_FLEET_TOKEN }}
