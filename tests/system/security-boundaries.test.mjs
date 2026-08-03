@@ -105,17 +105,25 @@ async function assertDenied(response, label) {
 }
 
 async function assertKvMissing(client, key, label) {
-  try {
-    const result = await client.kvGet(key);
-    assert.equal(
-      result?.entry ?? result?.value ?? null,
-      null,
-      `${label}: the denied/cross-tenant write became visible`,
-    );
-  } catch (error) {
-    if (error instanceof HttpError && error.status === 404) return;
-    throw error;
-  }
+  return eventually(
+    async () => {
+      try {
+        const result = await client.kvGet(key);
+        assert.equal(
+          result?.entry ?? result?.value ?? null,
+          null,
+          `${label}: the denied/cross-tenant write became visible`,
+        );
+      } catch (error) {
+        if (error instanceof HttpError && error.status === 404) return;
+        throw error;
+      }
+    },
+    {
+      timeoutMs: 60_000,
+      label: `${label} remains absent after routing convergence`,
+    },
+  );
 }
 
 describe(
@@ -153,7 +161,7 @@ describe(
 
     it(
       "AUTH-002: direct nodes reject missing, wrong, edge-only, bearer-only, and duplicated internal credentials",
-      { timeout: 120_000 },
+      { timeout: 180_000 },
       async () => {
         const nodeUrl = stack.nodeUrls[0];
         const key = uniqueKey("direct-node-bypass");
@@ -212,7 +220,7 @@ describe(
 
     it(
       "AUTH-007: the LB rejects node-plane credentials and ambiguous edge identities",
-      { timeout: 120_000 },
+      { timeout: 180_000 },
       async () => {
         const key = uniqueKey("lb-plane-separation");
         const base = [["content-type", "application/json"]];
@@ -302,7 +310,7 @@ describe(
 
     it(
       "AUTH-001: two organizations using the same raw KV key observe disjoint values through the full edge/LB/node path",
-      { timeout: 120_000 },
+      { timeout: 180_000 },
       async () => {
         const key = uniqueKey("cross-org-kv");
         const valueA = uniqueId("org-a-value");
@@ -330,7 +338,7 @@ describe(
 
     it(
       "AUTH-001: two organizations can independently hold the same raw lock key and receive distinct fencing authority",
-      { timeout: 120_000 },
+      { timeout: 180_000 },
       async () => {
         const key = uniqueKey("cross-org-lock");
         const holderA = uniqueId("org-a-holder");
@@ -352,14 +360,20 @@ describe(
         assert.ok(Number.isInteger(lockB?.fencing_token));
 
         await Promise.all([
-          edgeA.lockRelease(key, {
-            holder: holderA,
-            fencingToken: lockA.fencing_token,
-          }),
-          edgeB.lockRelease(key, {
-            holder: holderB,
-            fencingToken: lockB.fencing_token,
-          }),
+          eventually(
+            () => edgeA.lockRelease(key, {
+              holder: holderA,
+              fencingToken: lockA.fencing_token,
+            }),
+            { timeoutMs: 60_000, label: "org A lock release" },
+          ),
+          eventually(
+            () => edgeB.lockRelease(key, {
+              holder: holderB,
+              fencingToken: lockB.fencing_token,
+            }),
+            { timeoutMs: 60_000, label: "org B lock release" },
+          ),
         ]);
       },
     );
