@@ -23,11 +23,10 @@ permissions:
 
 jobs:
   chaos:
-    uses: opto-sync/opto-sync-e2e/.github/workflows/downstream-chaos-reusable.yml@855595bac694783280bd2ae04ed5abdb13f0c8f4
+    uses: opto-sync/opto-sync-e2e/.github/workflows/downstream-chaos-reusable.yml@e4c5a568bce154a5b77bd2018ae807e6d3882938
     with:
       profile_path: tests/opto-sync-wrapper/profile.json
       live_e2e: ${{ github.event_name == 'workflow_dispatch' && inputs.live_e2e }}
       wrapper_ref: ${{ inputs.wrapper_ref }}
     secrets:
       SYNC_FLEET_TOKEN: ${{ secrets.SYNC_FLEET_TOKEN }}
-
