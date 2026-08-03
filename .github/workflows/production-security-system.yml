@@ -82,12 +82,12 @@ jobs:
           ref: 06bbda3efd18d1e791bf933047f6baf28984959e
           path: fiducia-node.rs
 
-      - name: Check out the production load-balancer candidate
+      - name: Check out the DEN-1558 production load-balancer candidate
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           repository: fiducia-cloud/fiducia-load-balance.rs
-          ref: 437a7901c4a333dff1e8f9930e011c053cd3cc94
+          ref: 7a4e22a8eaec9109c2cebec2ae71546f6f6076ef
           path: fiducia-load-balance.rs
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -104,6 +104,12 @@ jobs:
           cargo +1.95.0 test --locked
           --manifest-path fiducia-node.rs/Cargo.toml
           plaintext_write_requires_exact_admin_scope_and_non_secret_keyspace
+
+      - name: Run the DEN-1558 trusted-edge header unit tests
+        run: >-
+          cargo +1.95.0 test --locked
+          --manifest-path fiducia-load-balance.rs/Cargo.toml
+          trusted_edge_identity_
 
       - name: Install locked JavaScript dependencies without lifecycle scripts
         working-directory: fiducia-e2e
