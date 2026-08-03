@@ -1,0 +1,194 @@
+name: opto-sync chaos e2e
+
+on:
+  pull_request:
+    paths:
+      - 'tests/opto-sync-wrapper/chaos.e2e.test.mjs'
+      - 'tests/opto-sync-wrapper/profile.json'
+      - '.github/workflows/opto-sync-chaos-e2e.yml'
+  workflow_dispatch:
+    inputs:
+      live_e2e:
+        description: Run the frozen SDK, native tests, real Chromium, and downstream chaos suite
+        required: true
+        default: false
+        type: boolean
+      wrapper_ref:
+        description: Optional matching sync-wrapper branch, tag, or immutable commit
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ZED_CLI_SHA: c636fb8f6b08695c6b4fe94e2481f4d57270b2d7
+  ZED_INTERFACES_SHA: dc0e0a0620b9462817950b552d3d334a184b1cb1
+  OPTO_SYNC_CLIENT_SHA: d5339b5c0213c760c219c7f6df1652e30b703ba6
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      sync_repository: ${{ steps.profile.outputs.sync_repository }}
+      sync_ref: ${{ steps.profile.outputs.sync_ref }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - id: profile
+        name: Validate chaos coverage and expose the matching wrapper
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check tests/opto-sync-wrapper/chaos.e2e.test.mjs
+          python3 - <<'PY'
+          import json, os, pathlib
+          root = pathlib.Path('tests/opto-sync-wrapper')
+          profile = json.loads((root / 'profile.json').read_text())
+          suite = (root / 'chaos.e2e.test.mjs').read_text()
+          assert profile['repository'] == os.environ['GITHUB_REPOSITORY']
+          assert profile['syncRepository'] and profile['syncRef']
+          assert profile['collections'] and profile['domainGuards']
+          required = (
+              'protocolPushRequest(', 'recordPushFailure(', 'clientId(',
+              'pullCheckpoint(', 'localView(', 'QueueQuotaError',
+              'queueDelete(', 'installSnapshot(', 'pendingMutations(',
+              'reconcileIncoming(', 'indexedDB.deleteDatabase(',
+          )
+          assert all(token in suite for token in required)
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f"sync_repository={profile['syncRepository']}\n")
+              output.write(f"sync_ref={profile['syncRef']}\n")
+          PY
+
+  source-chaos-and-service-worker:
+    needs: contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout downstream E2E profile
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          path: downstream
+          persist-credentials: false
+      - name: Checkout the exact hardened opto-sync clients source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: opto-sync/opto-sync-clients
+          ref: ${{ env.OPTO_SYNC_CLIENT_SHA }}
+          path: opto-sync-clients
+          persist-credentials: false
+          submodules: recursive
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22.16.0'
+          cache: npm
+          cache-dependency-path: |
+            opto-sync-clients/syncer.c/bindings/typescript/package-lock.json
+            opto-sync-clients/clients/ts/package-lock.json
+      - name: Build the pinned native and browser SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd opto-sync-clients/syncer.c/bindings/typescript && npm ci)
+          (cd opto-sync-clients/clients/ts && npm ci && npm run build)
+      - name: Run downstream crash, replay, quota, and convergence E2E
+        shell: bash
+        env:
+          OPTO_SYNC_PROFILE: ${{ github.workspace }}/downstream/tests/opto-sync-wrapper/profile.json
+          OPTO_SYNC_TS_ROOT: ${{ github.workspace }}/opto-sync-clients/clients/ts
+        run: >-
+          node --test
+          downstream/tests/opto-sync-wrapper/chaos.e2e.test.mjs
+      - name: Run real Chrome two-tab Service Worker termination and restart E2E
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd opto-sync-clients/clients/ts
+          npx playwright install --with-deps chromium
+          npm run test:service-worker-browser
+
+  live-chaos:
+    needs: contract
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.live_e2e }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    env:
+      SYNC_FLEET_TOKEN: ${{ secrets.SYNC_FLEET_TOKEN }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Require private fleet read credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$SYNC_FLEET_TOKEN" || {
+            echo 'SYNC_FLEET_TOKEN is required for cross-repository certification' >&2
+            exit 1
+          }
+      - name: Resolve wrapper ref
+        id: wrapper
+        shell: bash
+        env:
+          REQUESTED_REF: ${{ inputs.wrapper_ref }}
+          PROFILE_REF: ${{ needs.contract.outputs.sync_ref }}
+        run: |
+          set -euo pipefail
+          ref="${REQUESTED_REF:-$PROFILE_REF}"
+          test -n "$ref"
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: ${{ needs.contract.outputs.sync_repository }}
+          ref: ${{ steps.wrapper.outputs.ref }}
+          path: wrapper
+          token: ${{ secrets.SYNC_FLEET_TOKEN }}
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: zed-pkg/zed-cli
+          ref: ${{ env.ZED_CLI_SHA }}
+          path: .tools/zed-cli
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: zed-pkg/zed-interfaces
+          ref: ${{ env.ZED_INTERFACES_SHA }}
+          path: .tools/zed-interfaces
+          persist-credentials: false
+      - name: Build pinned Zed CLI
+        run: cargo build --locked --release --manifest-path .tools/zed-cli/Cargo.toml --bin zed
+      - name: Frozen-install the certified SDK and run native/browser/chaos tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          zed="$GITHUB_WORKSPACE/.tools/zed-cli/target/release/zed"
+          (cd wrapper && "$zed" install --frozen --install-mode copy)
+          python3 - <<'PY'
+          import pathlib, re, tomllib
+          lock = tomllib.loads(pathlib.Path('wrapper/.zpkg.lock').read_text())
+          package = next(
+              p for p in lock.get('package', [])
+              if p.get('org') == 'opto-sync' and p.get('name') == 'opto-sync-clients'
+          )
+          assert re.fullmatch(r'[0-9a-f]{64}', package['sha256'])
+          assert package['size'] > 0 and package['format'] and package['vcs_tag'] and package['source']
+          assert re.fullmatch(r'[0-9a-f]{40}', package['vcs_commit'])
+          PY
+          client="$GITHUB_WORKSPACE/wrapper/zed_modules/opto-sync/opto-sync-clients/clients/ts"
+          cd "$client"
+          npm ci
+          npm run build
+          npm run test:node
+          npx playwright install --with-deps chromium
+          OPTO_SYNC_REQUIRE_BROWSER=1 npm run test:browser
+          cp "$GITHUB_WORKSPACE/tests/opto-sync-wrapper/chaos.e2e.test.mjs" test/downstream-chaos.e2e.test.mjs
+          OPTO_SYNC_PROFILE="$GITHUB_WORKSPACE/tests/opto-sync-wrapper/profile.json" \
+            node --test test/downstream-chaos.e2e.test.mjs
