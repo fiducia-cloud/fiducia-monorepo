@@ -65,14 +65,6 @@ function edgeClient(stack, orgId, extraHeaders = {}) {
   return new FiduciaClient(stack.lbUrl, { fetch: edgeFetch });
 }
 
-function directNodeClient(stack, orgId) {
-  return new FiduciaClient(stack.nodeUrls[0], {
-    internalSecret: INTERNAL_SECRET,
-    internalOrgId: orgId,
-    failoverEndpoints: stack.nodeUrls.slice(1),
-  });
-}
-
 function duplicateHeaders(entries) {
   const headers = new Headers();
   for (const [name, value] of entries) headers.append(name, value);
@@ -136,14 +128,11 @@ describe(
     let edgeA;
     /** @type {FiduciaClient} */
     let edgeB;
-    /** @type {FiduciaClient} */
-    let directA;
 
     before(async () => {
       stack = await bootCoordinationStack({ shardCount: 4, compactThreshold: 16 });
       edgeA = edgeClient(stack, ORG_A);
       edgeB = edgeClient(stack, ORG_B);
-      directA = directNodeClient(stack, ORG_A);
 
       // The process readiness endpoints become healthy before every shard's LB
       // route has necessarily converged. Establish one committed operation so
@@ -214,7 +203,10 @@ describe(
           await assertDenied(response, attempt.label);
         }
 
-        await assertKvMissing(directA, key, "direct-node bypass attempts");
+        // Verify the denied writes through the authoritative LB path. A fixed
+        // direct node can correctly be a follower and reject linearizable reads
+        // with 503; that is not evidence that the denied write committed.
+        await assertKvMissing(edgeA, key, "direct-node bypass attempts");
       },
     );
 
