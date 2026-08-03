@@ -1,38 +1,73 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  artifactPath,
+  assertInPageBoundaries,
+  assertMainResponse,
   assertNoBrowserErrors,
   contractEnabled,
-  screenshotPath,
+  harnessHtml,
   startHarnessServer,
+  writeArtifact,
 } from '../support/harness-contract.mjs';
 
-test('Playwright satisfies the browser harness contract', { skip: !contractEnabled, timeout: 30_000 }, async () => {
+test('local harness enforces HTTP and security boundaries', { timeout: 10_000 }, async () => {
+  const harness = await startHarnessServer();
+  try {
+    const response = await fetch(harness.origin, { redirect: 'error' });
+    assertMainResponse(response.status, Object.fromEntries(response.headers.entries()));
+    assert.equal(await response.text(), harnessHtml);
+
+    const head = await fetch(harness.origin, { method: 'HEAD' });
+    assert.equal(head.status, 200);
+    assert.equal(await head.text(), '');
+
+    const rejected = await fetch(`${harness.origin}/healthz`, { method: 'POST' });
+    assert.equal(rejected.status, 405);
+    assert.equal(rejected.headers.get('allow'), 'GET, HEAD');
+
+    const missing = await fetch(`${harness.origin}/missing`);
+    assert.equal(missing.status, 404);
+  } finally {
+    await harness.close();
+  }
+});
+
+test('Playwright satisfies the browser harness contract', { skip: !contractEnabled, timeout: 45_000 }, async () => {
   const { chromium } = await import('playwright');
   const harness = await startHarnessServer();
-  const browser = await chromium.launch({ headless: true });
-  const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+  let browser;
+  let page;
   const errors = [];
-  page.on('console', (message) => {
-    if (message.type() === 'error') errors.push(`console: ${message.text()}`);
-  });
-  page.on('pageerror', (error) => errors.push(`pageerror: ${error.message}`));
 
   try {
+    browser = await chromium.launch({ headless: true });
+    page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+    page.on('console', (message) => {
+      if (message.type() === 'error') errors.push(`console: ${message.text()}`);
+    });
+    page.on('pageerror', (error) => errors.push(`pageerror: ${error.message}`));
+
     const response = await page.goto(harness.origin, { waitUntil: 'networkidle', timeout: 15_000 });
-    assert.equal(response?.status(), 200);
+    assert(response, 'navigation did not return a response');
+    assertMainResponse(response.status(), await response.allHeaders());
     await page.waitForFunction(() => document.querySelector('#state')?.textContent === 'ready');
     assert.equal(await page.title(), 'E2E Harness Contract');
     await page.click('#increment');
     await page.click('#increment');
     assert.equal(await page.textContent('#count'), '2');
-    assert.equal(await page.evaluate(() => document.cookie), '', 'HttpOnly cookie leaked into document.cookie');
-    assert.equal(await page.evaluate(() => fetch('/healthz').then((result) => result.text())), 'ok');
-    await page.screenshot({ path: await screenshotPath('playwright'), fullPage: true });
+    await assertInPageBoundaries((fn) => page.evaluate(fn));
     assertNoBrowserErrors(errors);
   } finally {
-    await page.close().catch(() => {});
-    await browser.close().catch(() => {});
+    if (page) {
+      await Promise.allSettled([
+        page.screenshot({ path: await artifactPath('playwright', 'harness-contract.png'), fullPage: true }),
+        page.content().then((content) => writeArtifact('playwright', 'page.html', content)),
+        writeArtifact('playwright', 'browser-errors.json', JSON.stringify(errors, null, 2)),
+      ]);
+      await page.close().catch(() => {});
+    }
+    await browser?.close().catch(() => {});
     await harness.close();
   }
 });
