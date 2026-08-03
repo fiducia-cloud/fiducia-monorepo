@@ -87,7 +87,7 @@ jobs:
         with:
           persist-credentials: false
           repository: fiducia-cloud/fiducia-load-balance.rs
-          ref: 7a4e22a8eaec9109c2cebec2ae71546f6f6076ef
+          ref: 6fd8352b900f465a44564e32ecec8f5e538fd864
           path: fiducia-load-balance.rs
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
