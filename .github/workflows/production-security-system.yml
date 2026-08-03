@@ -74,20 +74,20 @@ jobs:
           ref: 6081bc3f3b7cbe0312870968b61acc38ca91c66a
           path: fiducia-interfaces
 
-      - name: Check out the DEN-1244 production node candidate
+      - name: Check out the merged DEN-1244 production node revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           repository: fiducia-cloud/fiducia-node.rs
-          ref: 06bbda3efd18d1e791bf933047f6baf28984959e
+          ref: e858e564e99b9c4bb8e16ddca99bac0f394da5ac
           path: fiducia-node.rs
 
-      - name: Check out the DEN-1558 production load-balancer candidate
+      - name: Check out the merged DEN-1558 production load-balancer revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           repository: fiducia-cloud/fiducia-load-balance.rs
-          ref: 6fd8352b900f465a44564e32ecec8f5e538fd864
+          ref: f41ca7cdbf61d396724ff64b9461d3fe6112d23b
           path: fiducia-load-balance.rs
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
