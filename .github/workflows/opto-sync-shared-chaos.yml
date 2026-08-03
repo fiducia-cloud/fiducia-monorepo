@@ -1,0 +1,31 @@
+name: opto-sync shared chaos
+
+on:
+  pull_request:
+    paths: ['tests/opto-sync-wrapper/**', '.github/workflows/opto-sync-shared-chaos.yml']
+  workflow_dispatch:
+    inputs:
+      live_e2e:
+        description: Run frozen package, native, Chromium, service-worker, and chaos certification
+        required: true
+        default: false
+        type: boolean
+      wrapper_ref:
+        description: Optional exact sync-wrapper ref
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  chaos:
+    uses: opto-sync/opto-sync-e2e/.github/workflows/downstream-chaos-reusable.yml@dcf5ee5d15e4ed6aeb24952b296947b4ffb39e88
+    with:
+      profile_path: tests/opto-sync-wrapper/profile.json
+      product_test_path: tests/opto-sync-wrapper/product.e2e.test.mjs
+      live_e2e: ${{ github.event_name == 'workflow_dispatch' && inputs.live_e2e }}
+      wrapper_ref: ${{ inputs.wrapper_ref }}
+    secrets:
+      SYNC_FLEET_TOKEN: ${{ secrets.SYNC_FLEET_TOKEN }}
