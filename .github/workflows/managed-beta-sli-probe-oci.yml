@@ -140,11 +140,11 @@ jobs:
           run_probe
           run_probe
 
-          grep -Fq 'fiducia_external_probe_total{cell="cell-a",operation_class="health",result="success"} 2' "$state/probe.prom"
-          grep -Fq 'fiducia_external_probe_total{cell="cell-a",operation_class="health",result="failure"} 0' "$state/probe.prom"
+          sudo grep -Fq 'fiducia_external_probe_total{cell="cell-a",operation_class="health",result="success"} 2' "$state/probe.prom"
+          sudo grep -Fq 'fiducia_external_probe_total{cell="cell-a",operation_class="health",result="failure"} 0' "$state/probe.prom"
           test "$(stat -c '%a' "$state/probe.json")" = '600'
           test "$(stat -c '%a' "$state/probe.prom")" = '600'
-          if grep -Fq '127.0.0.1:18080' "$state/probe.prom"; then
+          if sudo grep -Fq '127.0.0.1:18080' "$state/probe.prom"; then
             echo 'metrics leaked the probe endpoint' >&2
             exit 1
           fi
