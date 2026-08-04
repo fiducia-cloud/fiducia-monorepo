@@ -17,7 +17,10 @@ import {
   withExclusiveLock,
 } from "../../scripts/managed-beta-sli-probe.mjs";
 
-describe("DEN-1404 managed beta external SLI probe", () => {
+const LOCATION_A = "probe-a";
+const LOCATION_B = "probe-b";
+
+describe("DEN-1404/DEN-1619 managed beta external SLI probe", () => {
   let server;
   let baseUrl;
   let temporary;
@@ -56,7 +59,7 @@ describe("DEN-1404 managed beta external SLI probe", () => {
     await rm(temporary, { recursive: true, force: true });
   });
 
-  it("persists cumulative success counters and never exports response or credential content", async () => {
+  it("persists location-scoped cumulative success counters without exporting response or credential content", async () => {
     const bearerFile = join(temporary, "bearer");
     const stateFile = join(temporary, "success-state.json");
     const textfile = join(temporary, "success.prom");
@@ -66,6 +69,7 @@ describe("DEN-1404 managed beta external SLI probe", () => {
       endpoint: `${baseUrl}/ok?key=customer-secret-path`,
       cell: "cell-a",
       operationClass: "health",
+      probeLocation: LOCATION_A,
       method: "GET",
       expectedStatuses: new Set([204]),
       bearerFile,
@@ -76,6 +80,7 @@ describe("DEN-1404 managed beta external SLI probe", () => {
       endpoint: `${baseUrl}/ok?key=another-customer-secret-path`,
       cell: "cell-a",
       operationClass: "health",
+      probeLocation: LOCATION_A,
       method: "GET",
       expectedStatuses: new Set([204]),
       bearerFile,
@@ -83,6 +88,8 @@ describe("DEN-1404 managed beta external SLI probe", () => {
       textfile,
     });
 
+    assert.equal(first.state.schemaVersion, 2);
+    assert.equal(first.state.probeLocation, LOCATION_A);
     assert.equal(first.state.successTotal, 1);
     assert.equal(second.state.successTotal, 2);
     assert.equal(second.state.failureTotal, 0);
@@ -91,11 +98,11 @@ describe("DEN-1404 managed beta external SLI probe", () => {
     const metrics = await readFile(textfile, "utf8");
     assert.match(
       metrics,
-      /fiducia_external_probe_total\{cell="cell-a",operation_class="health",result="success"\} 2/u,
+      /fiducia_external_probe_total\{cell="cell-a",operation_class="health",probe_location="probe-a",result="success"\} 2/u,
     );
     assert.match(
       metrics,
-      /fiducia_external_probe_total\{cell="cell-a",operation_class="health",result="failure"\} 0/u,
+      /fiducia_external_probe_total\{cell="cell-a",operation_class="health",probe_location="probe-a",result="failure"\} 0/u,
     );
     for (const forbidden of [
       bearer,
@@ -111,20 +118,51 @@ describe("DEN-1404 managed beta external SLI probe", () => {
     }
   });
 
+  it("keeps two failure-independent location lineages distinct", async () => {
+    const bearerFile = join(temporary, "location-bearer");
+    await writeFile(bearerFile, `${bearer}\n`, { mode: 0o600 });
+    const locationA = await runAndPersist({
+      endpoint: `${baseUrl}/ok`,
+      cell: "cell-a",
+      operationClass: "health",
+      probeLocation: LOCATION_A,
+      expectedStatuses: new Set([204]),
+      bearerFile,
+      stateFile: join(temporary, "location-a.json"),
+    });
+    const locationB = await runAndPersist({
+      endpoint: `${baseUrl}/ok`,
+      cell: "cell-a",
+      operationClass: "health",
+      probeLocation: LOCATION_B,
+      expectedStatuses: new Set([204]),
+      bearerFile,
+      stateFile: join(temporary, "location-b.json"),
+    });
+
+    assert.equal(locationA.state.successTotal, 1);
+    assert.equal(locationB.state.successTotal, 1);
+    assert.match(locationA.metrics, /probe_location="probe-a"/u);
+    assert.match(locationB.metrics, /probe_location="probe-b"/u);
+    assert.notEqual(locationA.state.probeLocation, locationB.state.probeLocation);
+  });
+
   it("accumulates HTTP and transport failures while preserving the last successful timestamp", async () => {
     const stateFile = join(temporary, "mixed-state.json");
     const successSample = {
       cell: "cell-b",
       operationClass: "linearizable_read",
+      probeLocation: LOCATION_B,
       result: "success",
       status: 200,
       durationSeconds: 0.01,
       timestampSeconds: 100,
     };
     const seeded = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       cell: "cell-b",
       operationClass: "linearizable_read",
+      probeLocation: LOCATION_B,
       successTotal: 1,
       failureTotal: 0,
       lastResult: "success",
@@ -138,6 +176,7 @@ describe("DEN-1404 managed beta external SLI probe", () => {
       endpoint: `${baseUrl}/unavailable`,
       cell: "cell-b",
       operationClass: "linearizable_read",
+      probeLocation: LOCATION_B,
       expectedStatuses: "200,204",
       stateFile,
     });
@@ -152,6 +191,7 @@ describe("DEN-1404 managed beta external SLI probe", () => {
       endpoint: "http://127.0.0.1:9/not-listening",
       cell: "cell-b",
       operationClass: "linearizable_read",
+      probeLocation: LOCATION_B,
       timeoutMs: 250,
       stateFile,
     });
@@ -168,6 +208,7 @@ describe("DEN-1404 managed beta external SLI probe", () => {
       endpoint: `${baseUrl}/oversized`,
       cell: "cell-c",
       operationClass: "secret_read",
+      probeLocation: LOCATION_A,
       expectedStatuses: "200",
       stateFile,
     });
@@ -176,15 +217,25 @@ describe("DEN-1404 managed beta external SLI probe", () => {
     assert.ok(!result.metrics.includes("x".repeat(100)));
   });
 
-  it("rejects unbounded configuration, corrupted/mismatched state, and multiline bearer files", async () => {
+  it("rejects missing/unbounded location, corrupted/legacy/mismatched state, and multiline bearer files", async () => {
     assert.throws(() => validateBoundedLabel("cell", "Org ID: customer-123"));
+    assert.throws(() => validateBoundedLabel("probeLocation", "https://site.example/"));
     assert.throws(() => parseExpectedStatuses("200,not-a-status"));
 
     await assert.rejects(
       runProbe({
         endpoint: `${baseUrl}/ok`,
         cell: "cell-a",
+        operationClass: "health",
+      }),
+      /probeLocation is required/u,
+    );
+    await assert.rejects(
+      runProbe({
+        endpoint: `${baseUrl}/ok`,
+        cell: "cell-a",
         operationClass: "tenant_42",
+        probeLocation: LOCATION_A,
       }),
     );
     await assert.rejects(
@@ -192,6 +243,7 @@ describe("DEN-1404 managed beta external SLI probe", () => {
         endpoint: `${baseUrl}/ok`,
         cell: "cell-a",
         operationClass: "health",
+        probeLocation: LOCATION_A,
         method: "TRACE",
       }),
     );
@@ -200,6 +252,7 @@ describe("DEN-1404 managed beta external SLI probe", () => {
         endpoint: `${baseUrl}/ok`,
         cell: "cell-a",
         operationClass: "health",
+        probeLocation: LOCATION_A,
         timeoutMs: 31_000,
       }),
     );
@@ -208,6 +261,7 @@ describe("DEN-1404 managed beta external SLI probe", () => {
         endpoint: `${baseUrl}/ok`,
         cell: "cell-a",
         operationClass: "health",
+        probeLocation: LOCATION_A,
       }),
     );
 
@@ -218,21 +272,46 @@ describe("DEN-1404 managed beta external SLI probe", () => {
         endpoint: `${baseUrl}/ok`,
         cell: "cell-a",
         operationClass: "health",
+        probeLocation: LOCATION_A,
         bearerFile: badBearer,
       }),
     );
 
     const corrupted = join(temporary, "corrupted-state.json");
     await writeFile(corrupted, "not-json\n", { mode: 0o600 });
-    await assert.rejects(readProbeState(corrupted, "cell-a", "health"));
+    await assert.rejects(
+      readProbeState(corrupted, "cell-a", "health", LOCATION_A),
+    );
+
+    const legacy = join(temporary, "legacy-state.json");
+    await writeFile(
+      legacy,
+      `${JSON.stringify({
+        schemaVersion: 1,
+        cell: "cell-a",
+        operationClass: "health",
+        successTotal: 10,
+        failureTotal: 1,
+        lastResult: "success",
+        lastDurationSeconds: 0.1,
+        lastRunUnixtime: 100,
+        lastSuccessUnixtime: 100,
+      })}\n`,
+      { mode: 0o600 },
+    );
+    await assert.rejects(
+      readProbeState(legacy, "cell-a", "health", LOCATION_A),
+      /assign a reviewed probe location and migrate the state explicitly/u,
+    );
 
     const mismatched = join(temporary, "mismatched-state.json");
     await writeFile(
       mismatched,
       `${JSON.stringify({
-        schemaVersion: 1,
-        cell: "cell-other",
+        schemaVersion: 2,
+        cell: "cell-a",
         operationClass: "health",
+        probeLocation: LOCATION_B,
         successTotal: 0,
         failureTotal: 0,
         lastResult: "failure",
@@ -242,14 +321,18 @@ describe("DEN-1404 managed beta external SLI probe", () => {
       })}\n`,
       { mode: 0o600 },
     );
-    await assert.rejects(readProbeState(mismatched, "cell-a", "health"));
+    await assert.rejects(
+      readProbeState(mismatched, "cell-a", "health", LOCATION_A),
+      /cell\/operation\/location/u,
+    );
 
     assert.throws(() =>
       validateState(
         {
-          schemaVersion: 1,
+          schemaVersion: 2,
           cell: "cell-a",
           operationClass: "health",
+          probeLocation: LOCATION_A,
           successTotal: Number.MAX_SAFE_INTEGER,
           failureTotal: 0,
           lastResult: "failure",
@@ -259,6 +342,7 @@ describe("DEN-1404 managed beta external SLI probe", () => {
         },
         "cell-a",
         "health",
+        LOCATION_A,
       ),
     );
   });
@@ -289,9 +373,10 @@ describe("DEN-1404 managed beta external SLI probe", () => {
 
   it("renders a valid cumulative state without inventing a successful observation", () => {
     const state = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       cell: "cell-d",
       operationClass: "health",
+      probeLocation: LOCATION_A,
       successTotal: 0,
       failureTotal: 3,
       lastResult: "failure",
@@ -300,6 +385,7 @@ describe("DEN-1404 managed beta external SLI probe", () => {
       lastSuccessUnixtime: 0,
     };
     const metrics = renderPrometheus(state);
+    assert.match(metrics, /probe_location="probe-a"/u);
     assert.match(metrics, /result="success"\} 0/u);
     assert.match(metrics, /result="failure"\} 3/u);
     assert.match(metrics, /last_success_unixtime\{[^}]+\} 0/u);
