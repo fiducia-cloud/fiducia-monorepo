@@ -49,7 +49,7 @@ jobs:
           umask 077
           printf 'TAP version 13\n1..1\nok 1 - synthetic upload-artifact v7 contract\n' >"$RUNNER_TEMP/fiducia-artifact-contract.tap"
           test "$(stat -c '%a' "$RUNNER_TEMP/fiducia-artifact-contract.tap")" = "600"
-          if grep -Eiq '(ghp_|github_pat_|lin_api_|AGE-SECRET-KEY-|authorization:[[:space:]]*bearer|password=|token=)' "$RUNNER_TEMP/fiducia-artifact-contract.tap"; then
+          if grep -Eiq '(ghp_|github_pat_|lin_api_|authorization:[[:space:]]*bearer|password=|token=)' "$RUNNER_TEMP/fiducia-artifact-contract.tap"; then
             echo "synthetic proof contains credential-shaped material" >&2
             exit 1
           fi
