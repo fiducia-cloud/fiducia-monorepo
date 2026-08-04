@@ -75,12 +75,19 @@ jobs:
             exit 1
           fi
 
-      - name: Prove fail-closed missing configuration
+      - name: Prove fail-closed missing endpoint configuration
         shell: bash
         run: |
           set -euo pipefail
           set +e
-          output="$(docker run --rm --read-only --network none fiducia-managed-beta-probe:contract 2>&1)"
+          output="$(docker run --rm \
+            --read-only \
+            --network none \
+            --tmpfs /tmp:rw,noexec,nosuid,size=8m \
+            --env FIDUCIA_PROBE_CELL=cell-a \
+            --env FIDUCIA_PROBE_OPERATION_CLASS=health \
+            --env FIDUCIA_PROBE_STATE_FILE=/tmp/probe.json \
+            fiducia-managed-beta-probe:contract 2>&1)"
           status=$?
           set -e
           test "$status" -eq 2
