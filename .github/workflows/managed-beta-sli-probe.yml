@@ -5,13 +5,13 @@ on:
     paths:
       - ".github/workflows/managed-beta-sli-probe.yml"
       - "scripts/managed-beta-sli-probe.mjs"
-      - "tests/unit/managed-beta-sli-probe.test.mjs"
+      - "tests/unit/managed-beta-sli-probe*.test.mjs"
   push:
     branches: [main]
     paths:
       - ".github/workflows/managed-beta-sli-probe.yml"
       - "scripts/managed-beta-sli-probe.mjs"
-      - "tests/unit/managed-beta-sli-probe.test.mjs"
+      - "tests/unit/managed-beta-sli-probe*.test.mjs"
   workflow_dispatch:
 
 permissions:
@@ -43,6 +43,7 @@ jobs:
         run: |
           node --check scripts/managed-beta-sli-probe.mjs
           node --check tests/unit/managed-beta-sli-probe.test.mjs
+          node --check tests/unit/managed-beta-sli-probe-hardening.test.mjs
 
       - name: Prove cumulative counters, bounded labels, redaction, failures, state integrity, locking, and atomic output
-        run: node --test tests/unit/managed-beta-sli-probe.test.mjs
+        run: node --test tests/unit/managed-beta-sli-probe*.test.mjs
