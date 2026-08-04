@@ -93,9 +93,19 @@ export const QUERIES = Object.freeze([
   {
     id: "external_probe_cumulative_totals",
     slo: "SLO-AVAIL-01",
-    expression: "fiducia_external_probe_total",
+    expression:
+      "max by (cell, operation_class, probe_location, result) (fiducia_external_probe_total)",
     dimensions: ["cell", "operation_class", "probe_location", "result"],
     expected: "cell_operation_location_result",
+  },
+  {
+    id: "external_probe_authority_count",
+    slo: "SLO-AVAIL-01",
+    expression:
+      "count by (cell, operation_class, probe_location, result) (fiducia_external_probe_total)",
+    dimensions: ["cell", "operation_class", "probe_location", "result"],
+    expected: "cell_operation_location_result",
+    exactValue: 1,
   },
 ]);
 
@@ -353,6 +363,9 @@ export function sanitizePrometheusVector(
     if (!Number.isFinite(timestamp) || !Number.isFinite(value)) {
       throw new Error("prometheus_non_finite_sample");
     }
+    if (query.exactValue !== undefined && value !== query.exactValue) {
+      throw new Error("prometheus_duplicate_probe_authority");
+    }
     samples.push({ labels, timestamp, value });
   }
   samples.sort((left, right) =>
@@ -390,6 +403,7 @@ function classifyError(error) {
     "prometheus_unexpected_label",
     "prometheus_duplicate_series",
     "prometheus_non_finite_sample",
+    "prometheus_duplicate_probe_authority",
   ]);
   return known.has(error?.message) ? error.message : "prometheus_query_failed";
 }
