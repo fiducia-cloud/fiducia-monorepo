@@ -5,7 +5,10 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 
-import { checkRepositorySecretPolicy } from "../scripts/check-secret-policy.mjs";
+import {
+  checkRepositorySecretPolicy,
+  validateSopsDotenv,
+} from "../scripts/check-secret-policy.mjs";
 
 async function repository(files) {
   const root = await mkdtemp(join(tmpdir(), "fiducia-secret-policy-test."));
@@ -21,6 +24,21 @@ async function repository(files) {
   return root;
 }
 
+function sopsDotenv(
+  value = "ENC[AES256_GCM,data:fixture,iv:fixture,tag:fixture,type:str]",
+) {
+  return [
+    `TOKEN=${value}`,
+    "sops_age__list_0__map_enc=-----BEGIN AGE ENCRYPTED FILE-----\\nfixture\\n-----END AGE ENCRYPTED FILE-----\\n",
+    "sops_age__list_0__map_recipient=age1fixturecustomerrecipient000000000000000000000000000000",
+    "sops_lastmodified=2026-08-04T00:00:00Z",
+    "sops_mac=ENC[AES256_GCM,data:fixture,iv:fixture,tag:fixture,type:str]",
+    "sops_unencrypted_suffix=_unencrypted",
+    "sops_version=3.13.3",
+    "",
+  ].join("\n");
+}
+
 function rules(findings) {
   return findings.map(({ rule }) => rule);
 }
@@ -29,17 +47,60 @@ test("accepts placeholders and structurally valid SOPS dotenv files", async () =
   const root = await repository({
     ".env.example": "DATABASE_URL=\nTOKEN=replace-me\n",
     "secrets/README.md": "No plaintext values.\n",
-    "secrets/customer/dev.sops.env": [
-      "TOKEN=ENC[AES256_GCM,data:fixture,iv:fixture,tag:fixture,type:str]",
-      "sops_age__list_0__map_enc=-----BEGIN AGE ENCRYPTED FILE-----\\nfixture\\n-----END AGE ENCRYPTED FILE-----\\n",
-      "sops_age__list_0__map_recipient=age1fixturecustomerrecipient000000000000000000000000000000",
-      "sops_mac=ENC[AES256_GCM,data:fixture,iv:fixture,tag:fixture,type:str]",
-      "sops_version=3.13.3",
-      "",
-    ].join("\n"),
+    "secrets/customer/dev.sops.env": sopsDotenv(),
   });
 
   assert.deepEqual(await checkRepositorySecretPolicy(root), []);
+});
+
+test("rejects plaintext application values despite valid-looking SOPS metadata", async () => {
+  assert.equal(validateSopsDotenv(sopsDotenv("plaintext-value")), false);
+  const root = await repository({
+    "secrets/customer/dev.sops.env": sopsDotenv("plaintext-value"),
+  });
+
+  assert.deepEqual(rules(await checkRepositorySecretPolicy(root)), [
+    "invalid-sops-dotenv",
+  ]);
+});
+
+test("rejects SOPS dotenv files outside the approved secrets tree", async () => {
+  const root = await repository({
+    "deploy/customer/dev.sops.env": sopsDotenv(),
+  });
+
+  assert.deepEqual(rules(await checkRepositorySecretPolicy(root)), [
+    "sops-outside-secrets",
+  ]);
+});
+
+test("scans ASCII credentials even when a tracked file contains NUL bytes", async () => {
+  const token = "gh" + "p_" + "A".repeat(36);
+  const root = await repository({
+    "binary-fixture.bin": Buffer.concat([
+      Buffer.from([0, 1, 2]),
+      Buffer.from(token),
+      Buffer.from([0, 3]),
+    ]),
+  });
+
+  assert.deepEqual(rules(await checkRepositorySecretPolicy(root)), [
+    "github-token",
+  ]);
+});
+
+test("detects a named Google Chat bridge token assignment", async () => {
+  const root = await repository({
+    "fixture.txt":
+      ["CHAT", "BRIDGE", "TOKEN"].join("_") +
+      "=" +
+      "A".repeat(40) +
+      "\n",
+  });
+
+  assert.deepEqual(rules(await checkRepositorySecretPolicy(root)), [
+    "google-chat-bridge-token",
+  ]);
 });
 
 test("rejects tracked plaintext dotenv files without printing values", async () => {
@@ -86,14 +147,16 @@ test("requires the pilot suffix and SOPS metadata under secrets", async () => {
   );
 });
 
-test("rejects private age, PEM, GitHub, Linear, and AWS credentials", async () => {
+test("rejects private age, PEM, GitHub, Linear, chat bridge, and AWS credentials", async () => {
   const sensitive = [
     ["AGE", "SECRET", "KEY"].join("-") + "-1FIXTUREONLY",
     "-----BEGIN " + "PRIVATE KEY-----",
     "gh" + "p_" + "A".repeat(36),
-    "github_" + "pat_" + "B".repeat(50),
-    "lin_" + "api_" + "C".repeat(30),
-    "AK" + "IA" + "D".repeat(16),
+    "gh" + "s_" + "B".repeat(36),
+    "github_" + "pat_" + "C".repeat(50),
+    "lin_" + "api_" + "D".repeat(30),
+    ["CHAT", "BRIDGE", "TOKEN"].join("_") + "=" + "E".repeat(40),
+    "AK" + "IA" + "F".repeat(16),
   ].join("\n");
   const root = await repository({ "fixture.txt": sensitive });
   const findings = await checkRepositorySecretPolicy(root);
@@ -103,9 +166,10 @@ test("rejects private age, PEM, GitHub, Linear, and AWS credentials", async () =
     new Set([
       "age-private-key",
       "pem-private-key",
-      "github-classic-token",
+      "github-token",
       "github-fine-grained-token",
       "linear-api-token",
+      "google-chat-bridge-token",
       "aws-access-key",
     ]),
   );
