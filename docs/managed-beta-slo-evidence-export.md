@@ -27,9 +27,12 @@ At the exact measurement-window end, the exporter uses POST-body PromQL for:
 - one-hour and six-hour burn rates;
 - per-location/cell/operation source freshness;
 - per-location/cell/operation age of last success;
-- raw cumulative success/failure counters per location/cell/operation.
+- cumulative success/failure counters aggregated by location/cell/operation/result;
+- raw-series authority counts aggregated by the same bounded identity.
 
-Aggregate SLO records remain cell-scoped. Source inventory, freshness, last success, and counters retain `probe_location` so one missing or duplicated source cannot hide inside an aggregate.
+Aggregate SLO records remain cell-scoped. Source inventory, freshness, last success, and counters retain `probe_location` so one missing source cannot hide inside an aggregate.
+
+The cumulative-counter query uses `max by (cell, operation_class, probe_location, result)` rather than exporting raw scrape series. This removes ordinary Prometheus transport labels such as `job` and `instance` at the reviewed query boundary without widening the evidence schema. A separate `count by (...)` query must return exactly `1` for every bounded identity, so the aggregation cannot hide duplicate scrape or producer authority.
 
 ## Recorded identities
 
@@ -49,8 +52,9 @@ The bundle includes:
 1. all fixed queries succeeded;
 2. each query returned the exact expected bounded matrix;
 3. every declared location was observed;
-4. at least two locations were declared;
-5. the independence attestation and reviewer were supplied.
+4. every raw-series authority count was exactly one;
+5. at least two locations were declared;
+6. the independence attestation and reviewer were supplied.
 
 It does not mean the SLO objective passed, the service is safe to launch, or an independent reviewer accepted the broader release bundle.
 
@@ -58,15 +62,15 @@ It does not mean the SLO objective passed, the service is safe to launch, or an 
 
 The Prometheus URL is not exported. Authentication is accepted only through `FIDUCIA_PROMETHEUS_BEARER_FILE`, which must contain one bounded line. Queries are POST bodies rather than URL query strings.
 
-Returned series may contain only:
+Returned series, after fixed reviewed aggregation, may contain only:
 
 - `__name__`;
 - `probe_location` for source queries;
 - `cell`;
 - `operation_class`;
-- `result` for cumulative counters.
+- `result` for cumulative counters and authority counts.
 
-`probe_location`, `cell`, and `operation_class` must match the declared bounded sets. Unknown labels or undeclared values fail the query without copying upstream content.
+`probe_location`, `cell`, and `operation_class` must match the declared bounded sets. Unknown labels or undeclared values fail the query without copying upstream content. Scrape-transport labels are removed by fixed PromQL rather than admitted to the evidence allowlist.
 
 Forbidden data includes tenant/project/environment IDs, resource keys/paths, credentials, endpoints, request/trace IDs, response content, scheduler paths, hostnames, IP addresses, site descriptions, and raw error text.
 
@@ -108,18 +112,21 @@ Output and lock files use restrictive permissions and atomic replacement. Concur
 1. Pin exact source/config/rules commits and runtime digests.
 2. Confirm every producer emits the bounded cumulative `cell` / `operation_class` / `result` series with durable counter continuity.
 3. Confirm reviewed Prometheus configuration injects one unique bounded `probe_location` per source with `honor_labels: false`.
-4. Confirm at least two locations are genuinely failure-independent.
-5. Install location-aware recording rules, source alerts, and dashboard.
-6. Select a completed 28–35-day window and stable decision ID.
-7. Run with a least-privilege read-only Prometheus bearer file.
-8. Verify query completeness, declared/observed location equality, sample count, freshness, last-success age, and integrity.
-9. Attach the immutable bundle to release evidence and obtain independent reliability/security review.
+4. Confirm every bounded location/cell/operation/result identity has exactly one raw scrape authority.
+5. Confirm at least two locations are genuinely failure-independent.
+6. Install location-aware recording rules, source alerts, and dashboard.
+7. Select a completed 28–35-day window and stable decision ID.
+8. Run with a least-privilege read-only Prometheus bearer file.
+9. Verify query completeness, declared/observed location equality, authority count, sample count, freshness, last-success age, and integrity.
+10. Attach the immutable bundle to release evidence and obtain independent reliability/security review.
 
 ## Test coverage
 
 The dependency-free suite proves:
 
 - fixed query order and exact evaluation time;
+- fixed aggregation removes raw scrape metadata from the evidence boundary;
+- duplicate raw authority fails closed even though cumulative totals are aggregated;
 - complete location/cell/operation/result matrices;
 - one missing location makes evidence incomplete;
 - honest missing-cell and no-data behavior;

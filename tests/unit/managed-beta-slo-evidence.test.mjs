@@ -23,6 +23,12 @@ const LOCATIONS = ["probe-a", "probe-b"];
 const BEARER = "prometheus-read-token-that-must-never-enter-evidence";
 const RESPONSE_CANARY = "RESPONSE_SECRET_MUST_NOT_SURVIVE_4fd3356c";
 
+function query(id) {
+  const found = QUERIES.find((candidate) => candidate.id === id);
+  assert.ok(found, `missing fixed query ${id}`);
+  return found;
+}
+
 function vector(samples) {
   return {
     status: "success",
@@ -69,18 +75,25 @@ function completeSamples(expression) {
       })),
     );
   }
-  if (expression === "fiducia_external_probe_total") {
+
+  const totalsExpression = query("external_probe_cumulative_totals").expression;
+  const authorityExpression = query("external_probe_authority_count").expression;
+  if (expression === totalsExpression || expression === authorityExpression) {
     return CELLS.flatMap((cell) =>
       LOCATIONS.flatMap((probeLocation) =>
         ["failure", "success"].map((result) => ({
           labels: {
-            __name__: expression,
             cell,
             operation_class: "health",
             probe_location: probeLocation,
             result,
           },
-          value: result === "success" ? 9999 : 1,
+          value:
+            expression === authorityExpression
+              ? 1
+              : result === "success"
+                ? 9999
+                : 1,
         })),
       ),
     );
@@ -183,15 +196,31 @@ describe("DEN-1404/DEN-1619 managed beta SLO evidence exporter", () => {
     );
     assert.equal(evidence.exact_queries.length, QUERIES.length);
     assert.deepEqual(
-      seenQueries.map((query) => query.expression),
-      QUERIES.map((query) => query.expression),
+      seenQueries.map((entry) => entry.expression),
+      QUERIES.map((entry) => entry.expression),
     );
     assert.ok(
-      seenQueries.every((query) => query.time === String(END.getTime() / 1000)),
+      seenQueries.every((entry) => entry.time === String(END.getTime() / 1000)),
       "every query must use the exact declared window end",
     );
-    assert.ok(evidence.exact_queries.every((query) => query.complete));
-    assert.ok(evidence.exact_queries.every((query) => query.status === "success"));
+    assert.ok(evidence.exact_queries.every((entry) => entry.complete));
+    assert.ok(evidence.exact_queries.every((entry) => entry.status === "success"));
+
+    const totalsQuery = query("external_probe_cumulative_totals");
+    const authorityQuery = query("external_probe_authority_count");
+    assert.equal(
+      totalsQuery.expression,
+      "max by (cell, operation_class, probe_location, result) (fiducia_external_probe_total)",
+    );
+    assert.equal(
+      authorityQuery.expression,
+      "count by (cell, operation_class, probe_location, result) (fiducia_external_probe_total)",
+    );
+    assert.equal(authorityQuery.exactValue, 1);
+    assert.ok(
+      !QUERIES.some((entry) => entry.expression === "fiducia_external_probe_total"),
+      "raw scrape series must not cross the evidence boundary",
+    );
 
     const unsigned = structuredClone(evidence);
     delete unsigned.integrity;
@@ -248,15 +277,35 @@ describe("DEN-1404/DEN-1619 managed beta SLO evidence exporter", () => {
       evidence.measurement_source.observed_probe_locations,
       ["probe-a"],
     );
-    const locationQueries = evidence.exact_queries.filter((query) =>
-      query.expression.includes("external_probe"),
+    const locationQueries = evidence.exact_queries.filter((entry) =>
+      entry.expression.includes("external_probe"),
     );
-    assert.ok(locationQueries.every((query) => query.complete === false));
+    assert.ok(locationQueries.every((entry) => entry.complete === false));
     assert.ok(
-      locationQueries.every((query) =>
-        query.missing.some((key) => key.includes("probe_location=probe-b")),
+      locationQueries.every((entry) =>
+        entry.missing.some((key) => key.includes("probe_location=probe-b")),
       ),
     );
+  });
+
+  it("fails closed when duplicate scrape series claim one probe authority", async () => {
+    const authorityExpression = query("external_probe_authority_count").expression;
+    behavior = (expression) => {
+      const samples = completeSamples(expression);
+      if (expression === authorityExpression) {
+        samples[0] = { ...samples[0], value: 2 };
+      }
+      return vector(samples);
+    };
+
+    const evidence = await exportEvidence(config(baseUrl, temporary), END);
+    const authority = evidence.exact_queries.find(
+      (entry) => entry.id === "external_probe_authority_count",
+    );
+    assert.equal(authority.status, "prometheus_duplicate_probe_authority");
+    assert.equal(authority.complete, false);
+    assert.equal(authority.samples.length, 0);
+    assert.equal(evidence.candidate_measurement_complete, false);
   });
 
   it("preserves honest no-data and missing-cell behavior", async () => {
@@ -268,16 +317,16 @@ describe("DEN-1404/DEN-1619 managed beta SLO evidence exporter", () => {
       );
     const evidence = await exportEvidence(config(baseUrl, temporary), END);
     assert.equal(evidence.candidate_measurement_complete, false);
-    for (const query of evidence.exact_queries) {
-      assert.equal(query.complete, false);
-      assert.ok(query.missing.some((key) => key.includes("cell=cell-b")));
+    for (const entry of evidence.exact_queries) {
+      assert.equal(entry.complete, false);
+      assert.ok(entry.missing.some((key) => key.includes("cell=cell-b")));
     }
 
     behavior = () => vector([]);
     const noData = await exportEvidence(config(baseUrl, temporary), END);
     assert.equal(noData.candidate_measurement_complete, false);
     assert.deepEqual(noData.measurement_source.observed_probe_locations, []);
-    assert.ok(noData.exact_queries.every((query) => query.status === "no_data"));
+    assert.ok(noData.exact_queries.every((entry) => entry.status === "no_data"));
   });
 
   it("rejects unexpected customer/location labels and redacts upstream HTTP bodies", async () => {
@@ -304,12 +353,12 @@ describe("DEN-1404/DEN-1619 managed beta SLO evidence exporter", () => {
     };
     const evidence = await exportEvidence(config(baseUrl, temporary), END);
     assert.equal(
-      evidence.exact_queries.find((query) => query.id === "availability_ratio_28d")
+      evidence.exact_queries.find((entry) => entry.id === "availability_ratio_28d")
         .status,
       "prometheus_unexpected_label",
     );
     assert.equal(
-      evidence.exact_queries.find((query) => query.id === "availability_samples_28d")
+      evidence.exact_queries.find((entry) => entry.id === "availability_samples_28d")
         .status,
       "http_error",
     );
@@ -431,27 +480,49 @@ describe("DEN-1404/DEN-1619 managed beta SLO evidence exporter", () => {
       ),
     );
 
-    const locationQuery = QUERIES.find(
-      (query) => query.id === "external_probe_freshness_seconds",
-    );
-    assert.throws(() =>
-      sanitizePrometheusVector(
-        locationQuery,
-        vector([
-          {
-            labels: {
-              cell: "cell-a",
-              operation_class: "health",
-              probe_location: "undeclared-location",
+    const locationQuery = query("external_probe_freshness_seconds");
+    assert.throws(
+      () =>
+        sanitizePrometheusVector(
+          locationQuery,
+          vector([
+            {
+              labels: {
+                cell: "cell-a",
+                operation_class: "health",
+                probe_location: "undeclared-location",
+              },
+              value: 1,
             },
-            value: 1,
-          },
-        ]),
-        ["cell-a"],
-        ["health"],
-        LOCATIONS,
-      ),
+          ]),
+          ["cell-a"],
+          ["health"],
+          LOCATIONS,
+        ),
       /probe_location is outside the approved bounded label set/u,
+    );
+
+    const authorityQuery = query("external_probe_authority_count");
+    assert.throws(
+      () =>
+        sanitizePrometheusVector(
+          authorityQuery,
+          vector([
+            {
+              labels: {
+                cell: "cell-a",
+                operation_class: "health",
+                probe_location: "probe-a",
+                result: "success",
+              },
+              value: 2,
+            },
+          ]),
+          ["cell-a"],
+          ["health"],
+          LOCATIONS,
+        ),
+      /prometheus_duplicate_probe_authority/u,
     );
   });
 });
