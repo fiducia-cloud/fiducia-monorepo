@@ -39,6 +39,19 @@ write access only to its dedicated state/textfile volume. It does not need the
 Kubernetes API, Docker socket, host filesystem, service-account token, or
 inbound network port.
 
+## Monitoring-topology identity
+
+The probe does not emit or accept `probe_location`. It owns only the bounded
+service-side `cell` and `operation_class` values plus its cumulative result
+state. The trusted Prometheus scrape/remote-write boundary injects one reviewed
+`probe_location` value for the runtime with `honor_labels: false`.
+
+This separation is a security property: an untrusted or compromised probe cannot
+claim that one process represents two independent failure domains merely by
+changing an environment variable or metric label. The deployment inventory and
+independent reviewer must map each trusted scrape-injected location ID to a real
+host, scheduler/state authority, credential, and network failure domain.
+
 ## Local container contract
 
 Build:
@@ -62,7 +75,7 @@ response content.
 
 ## Publication
 
-After this PR merges to `main`, the publish job builds and pushes:
+After this change merges to `main`, the publish job builds and pushes:
 
 ```text
 ghcr.io/fiducia-cloud/fiducia-managed-beta-probe:<full-git-sha>
@@ -83,15 +96,17 @@ At least two probe instances must not share the same:
 - credential file or operator identity;
 - outbound network/provider failure domain.
 
-Each instance uses a unique bounded `cell`/probe-location identity and its own
-persistent state file. Two replicas sharing one state file are forbidden; two
-replicas claiming the same Prometheus source identity trigger the duplicate
-series alert in the managed-beta SLO rules.
+Each instance uses one bounded service `cell` and its own persistent state file.
+The trusted monitoring configuration gives each instance a unique bounded
+`probe_location`. Two replicas sharing one state file are forbidden; two scrape
+targets claiming the same trusted location/cell/operation identity trigger the
+duplicate-series alert in the managed-beta SLO rules.
 
 ## Evidence maturity
 
 A green image contract and published OCI digest make the producer deployable, not
 `instrumented` or `measured`. Instrumentation begins only after named external
 locations run the digest-pinned image and central Prometheus receives fresh
-cumulative series. Exact-candidate measurement still requires the completed
-window, evidence exporter, and independent review.
+cumulative series with trusted scrape-injected location identity. Exact-candidate
+measurement still requires the completed window, evidence exporter, and
+independent review.
