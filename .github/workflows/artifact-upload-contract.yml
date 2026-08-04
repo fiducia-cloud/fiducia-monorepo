@@ -1,0 +1,65 @@
+name: artifact upload contract
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/cron-staging.yml"
+      - ".github/workflows/artifact-upload-contract.yml"
+      - "tests/unit/artifact-upload-workflow.test.mjs"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/cron-staging.yml"
+      - ".github/workflows/artifact-upload-contract.yml"
+      - "tests/unit/artifact-upload-workflow.test.mjs"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  upload:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Validate workflows
+        uses: docker://rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
+        with:
+          args: .github/workflows/cron-staging.yml .github/workflows/artifact-upload-contract.yml
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "22.22.1"
+
+      - name: Validate immutable artifact-upload contract
+        run: node --test tests/unit/artifact-upload-workflow.test.mjs
+
+      - name: Create bounded synthetic proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          printf 'TAP version 13\n1..1\nok 1 - synthetic upload-artifact v7 contract\n' >"$RUNNER_TEMP/fiducia-artifact-contract.tap"
+          test "$(stat -c '%a' "$RUNNER_TEMP/fiducia-artifact-contract.tap")" = "600"
+          if grep -Eiq '(ghp_|github_pat_|lin_api_|AGE-SECRET-KEY-|authorization:[[:space:]]*bearer|password=|token=)' "$RUNNER_TEMP/fiducia-artifact-contract.tap"; then
+            echo "synthetic proof contains credential-shaped material" >&2
+            exit 1
+          fi
+
+      - name: Exercise pinned upload-artifact v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
+        with:
+          name: fiducia-upload-artifact-v7-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/fiducia-artifact-contract.tap
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+          include-hidden-files: false
