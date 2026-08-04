@@ -39,7 +39,14 @@ test("CI builds and executes the image under a read-only, network-disabled runti
   assert.match(workflow, /--tmpfs \/tmp:rw,noexec,nosuid,size=16m/u);
   assert.match(workflow, /--entrypoint node/u);
   assert.match(workflow, /--test tests\/smoke\.test\.mjs/u);
-  assert.match(workflow, /test "\$\(docker image inspect --format '\{\{\.Config\.User\}\}'/u);
-  assert.match(workflow, /v26\.5\.1/u);
+  assert.match(
+    workflow,
+    /docker image inspect --format '\{\{\.Config\.User\}\}' fiducia-e2e-conformance:contract/u,
+  );
+  assert.match(
+    workflow,
+    /docker image inspect --format '\{\{json \.Config\.Cmd\}\}' fiducia-e2e-conformance:contract/u,
+  );
+  assert.match(workflow, /test "\$version" = "v26\.5\.1"/u);
   assert.doesNotMatch(workflow, /docker push|packages: write/u);
 });
