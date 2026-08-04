@@ -9,7 +9,7 @@ async function text(path) {
   return readFile(path, "utf8");
 }
 
-describe("DEN-1404 managed beta probe OCI contract", () => {
+describe("DEN-1404/DEN-1619 managed beta probe OCI contract", () => {
   it("pins the exact Node base image by full digest", async () => {
     const dockerfile = await text(dockerfilePath);
     assert.match(
@@ -51,13 +51,31 @@ describe("DEN-1404 managed beta probe OCI contract", () => {
     }
   });
 
+  it("proves the runtime carries an opaque location and schema-v2 state identity", async () => {
+    const workflow = await text(workflowPath);
+    assert.match(workflow, /FIDUCIA_PROBE_LOCATION=probe-a/u);
+    assert.match(
+      workflow,
+      /probe_location=\"probe-a\"|probe_location="probe-a"/u,
+    );
+    assert.match(workflow, /\.schemaVersion == 2/u);
+    assert.match(workflow, /\.probeLocation == "probe-a"/u);
+    assert.ok(!workflow.includes("FIDUCIA_PROBE_LOCATION=https://"));
+  });
+
   it("keeps registry publication separate from pull-request validation", async () => {
     const workflow = await text(workflowPath);
-    assert.match(workflow, /if: github\.event_name == 'push' && github\.ref == 'refs\/heads\/main'/u);
+    assert.match(
+      workflow,
+      /if: github\.event_name == 'push' && github\.ref == 'refs\/heads\/main'/u,
+    );
     assert.match(workflow, /packages: write/u);
     assert.match(workflow, /provenance: mode=max/u);
     assert.match(workflow, /sbom: true/u);
-    assert.match(workflow, /ghcr\.io\/fiducia-cloud\/fiducia-managed-beta-probe:\$\{\{ github\.sha \}\}/u);
+    assert.match(
+      workflow,
+      /ghcr\.io\/fiducia-cloud\/fiducia-managed-beta-probe:\$\{\{ github\.sha \}\}/u,
+    );
     assert.ok(!workflow.includes(":latest"));
   });
 });
