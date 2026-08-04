@@ -193,9 +193,6 @@ npm run test:webapps        # real auth/admin/backend + local stubs/scratch PG
 npm run test:system         # real 3-node fiducia-node cluster + fiducia-load-balance
 npm run test:multicluster   # real Kind x3 node + brain Raft and three LBs
 npm run test:browser        # web/auth stack driven through Playwright + Puppeteer
-npm run check:secrets       # reject tracked plaintext dotenvs and private credentials
-npm run test:secrets        # unit-test the tracked-file secret policy
-npm run test:sops           # ephemeral SOPS/age round-trip and plane-isolation proof
 npm run lint                # ESM syntax check (dependency-light, no ESLint)
 npm run proof:hetzner       # strict fail-closed proof + sanitized evidence bundle
 

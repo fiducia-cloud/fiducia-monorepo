@@ -6,10 +6,6 @@ Every spec drives the real HTTP contract via `src/`. Ordinary offline CI
 enables strict mode so missing routes, capabilities, endpoints, or identities
 fail instead.
 
-`secret-policy.test.mjs` exercises the tracked-file policy with synthetic
-fixtures and verifies that findings identify files and rules without printing
-credential values. `npm run test:sops` performs the real SOPS/age round trip.
-
 - `smoke.test.mjs` — reachability of the primary endpoint (`/healthz`,
   `/v1/status`).
 - `conformance/` — per-primitive correctness, one file per family (locks,

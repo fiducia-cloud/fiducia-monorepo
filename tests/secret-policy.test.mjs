@@ -15,7 +15,9 @@ async function repository(files) {
     await mkdir(dirname(target), { recursive: true });
     await writeFile(target, content, { mode: 0o600 });
   }
-  execFileSync("git", ["-C", root, "add", "--", "."], { stdio: "ignore" });
+  execFileSync("git", ["-C", root, "add", "--", "."], {
+    stdio: "ignore",
+  });
   return root;
 }
 
@@ -41,7 +43,9 @@ test("accepts placeholders and structurally valid SOPS dotenv files", async () =
 });
 
 test("rejects tracked plaintext dotenv files without printing values", async () => {
-  const root = await repository({ "deploy/customer/.env.production": "TOKEN=do-not-print-this-value\n" });
+  const root = await repository({
+    "deploy/customer/.env.production": "TOKEN=do-not-print-this-value\n",
+  });
   const findings = await checkRepositorySecretPolicy(root);
 
   assert.deepEqual(rules(findings), ["tracked-plaintext-env"]);
@@ -49,9 +53,18 @@ test("rejects tracked plaintext dotenv files without printing values", async () 
 });
 
 test("the CLI fails without echoing a rejected credential value", async () => {
-  const root = await repository({ ".env.local": "TOKEN=cli-do-not-print-this-value\n" });
-  const script = join(import.meta.dirname, "..", "scripts", "check-secret-policy.mjs");
-  const result = spawnSync(process.execPath, [script, "--root", root], { encoding: "utf8" });
+  const root = await repository({
+    ".env.local": "TOKEN=cli-do-not-print-this-value\n",
+  });
+  const script = join(
+    import.meta.dirname,
+    "..",
+    "scripts",
+    "check-secret-policy.mjs",
+  );
+  const result = spawnSync(process.execPath, [script, "--root", root], {
+    encoding: "utf8",
+  });
 
   assert.equal(result.status, 1);
   assert.match(result.stderr, /\.env\.local: tracked-plaintext-env/u);
@@ -59,14 +72,18 @@ test("the CLI fails without echoing a rejected credential value", async () => {
   assert.equal(result.stdout.includes("cli-do-not-print-this-value"), false);
 });
 
-test("requires approved encrypted suffixes and SOPS metadata under secrets", async () => {
+test("requires the pilot suffix and SOPS metadata under secrets", async () => {
   const root = await repository({
     "secrets/customer/dev.env": "TOKEN=fixture\n",
     "secrets/admin/dev.sops.env": "TOKEN=fixture\n",
+    "secrets/customer/dev.sops.json": '{"token":"plaintext-fixture"}\n',
   });
   const findings = await checkRepositorySecretPolicy(root);
 
-  assert.deepEqual(new Set(rules(findings)), new Set(["unencrypted-secret-path", "invalid-sops-dotenv"]));
+  assert.deepEqual(
+    new Set(rules(findings)),
+    new Set(["unencrypted-secret-path", "invalid-sops-dotenv"]),
+  );
 });
 
 test("rejects private age, PEM, GitHub, Linear, and AWS credentials", async () => {
@@ -92,16 +109,30 @@ test("rejects private age, PEM, GitHub, Linear, and AWS credentials", async () =
       "aws-access-key",
     ]),
   );
-  for (const secret of sensitive.split("\n")) assert.equal(JSON.stringify(findings).includes(secret), false);
+  for (const secret of sensitive.split("\n")) {
+    assert.equal(JSON.stringify(findings).includes(secret), false);
+  }
 });
 
 test("refuses tracked symlinks instead of following their targets", async () => {
   const root = await repository({ "outside.txt": "safe fixture\n" });
   await symlink("outside.txt", join(root, "tracked-link.txt"));
-  execFileSync("git", ["-C", root, "add", "--", "tracked-link.txt"], { stdio: "ignore" });
+  execFileSync("git", ["-C", root, "add", "--", "tracked-link.txt"], {
+    stdio: "ignore",
+  });
 
   const findings = await checkRepositorySecretPolicy(root);
   assert.deepEqual(rules(findings), ["tracked-symlink"]);
+});
+
+test("fails closed instead of silently skipping oversized tracked files", async () => {
+  const root = await repository({
+    "large-fixture.txt": "x".repeat(1024 * 1024 + 1),
+  });
+  const findings = await checkRepositorySecretPolicy(root);
+
+  assert.deepEqual(rules(findings), ["oversized-tracked-file"]);
+  assert.equal(JSON.stringify(findings).includes("x".repeat(100)), false);
 });
 
 test("the repository currently satisfies its own tracked-file policy", async () => {

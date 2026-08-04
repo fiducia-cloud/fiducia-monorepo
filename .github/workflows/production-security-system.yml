@@ -1,0 +1,128 @@
+name: production security system proof
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/production-security-system.yml"
+      - "package.json"
+      - "package-lock.json"
+      - "src/client.mjs"
+      - "src/coordination.mjs"
+      - "tests/helpers.mjs"
+      - "tests/system/security-boundaries.test.mjs"
+      - "tests/system/kv-isolation.test.mjs"
+      - "tests/system/plaintext-policy.test.mjs"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/production-security-system.yml"
+      - "package.json"
+      - "package-lock.json"
+      - "src/client.mjs"
+      - "src/coordination.mjs"
+      - "tests/helpers.mjs"
+      - "tests/system/security-boundaries.test.mjs"
+      - "tests/system/kv-isolation.test.mjs"
+      - "tests/system/plaintext-policy.test.mjs"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tenant-and-trust-boundaries:
+    name: AUTH-001 / AUTH-002 / AUTH-007 / KV-001 / KV-002 / KV-004 real-process proof
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out E2E suite
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          path: fiducia-e2e
+
+      - name: Validate this workflow
+        uses: docker://rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
+        with:
+          args: fiducia-e2e/.github/workflows/production-security-system.yml
+
+      - name: Check out local test configuration dependency
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          repository: fiducia-cloud/fiducia-test-config
+          ref: 825220281fdc16bbf47a035177001d2fe29bdabf
+          path: fiducia-test-config
+
+      - name: Check out pinned routing contract
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          repository: fiducia-cloud/fiducia-routing.rs
+          ref: c694bc5c58587bec12989a347e926c0040aacada
+          path: fiducia-routing.rs
+
+      - name: Check out pinned interface contract
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          repository: fiducia-cloud/fiducia-interfaces
+          ref: 6081bc3f3b7cbe0312870968b61acc38ca91c66a
+          path: fiducia-interfaces
+
+      - name: Check out the merged DEN-1244 production node revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          repository: fiducia-cloud/fiducia-node.rs
+          ref: e858e564e99b9c4bb8e16ddca99bac0f394da5ac
+          path: fiducia-node.rs
+
+      - name: Check out the merged DEN-1558 production load-balancer revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          repository: fiducia-cloud/fiducia-load-balance.rs
+          ref: f41ca7cdbf61d396724ff64b9461d3fe6112d23b
+          path: fiducia-load-balance.rs
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22.22.1"
+          cache: npm
+          cache-dependency-path: fiducia-e2e/package-lock.json
+
+      - name: Install the pinned Rust toolchain
+        run: rustup toolchain install 1.95.0 --profile minimal
+
+      - name: Run the DEN-1244 node policy unit test
+        run: >-
+          cargo +1.95.0 test --locked
+          --manifest-path fiducia-node.rs/Cargo.toml
+          plaintext_write_requires_exact_admin_scope_and_non_secret_keyspace
+
+      - name: Run the DEN-1558 trusted-edge header unit tests
+        run: >-
+          cargo +1.95.0 test --locked
+          --manifest-path fiducia-load-balance.rs/Cargo.toml
+          trusted_edge_identity_
+
+      - name: Install locked JavaScript dependencies without lifecycle scripts
+        working-directory: fiducia-e2e
+        run: npm ci --ignore-scripts
+
+      - name: Parse every source, test, and script
+        working-directory: fiducia-e2e
+        run: npm run lint
+
+      - name: Run DEN-1391 tenant, trusted-hop, plaintext, KV, and secret-boundary proof
+        working-directory: fiducia-e2e
+        run: npm run test:system:security
+
+      - name: Audit JavaScript dependencies
+        working-directory: fiducia-e2e
+        run: npm audit --audit-level=high
