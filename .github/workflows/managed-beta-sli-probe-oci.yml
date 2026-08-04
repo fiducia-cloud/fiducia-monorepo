@@ -216,7 +216,7 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
-          export LEDGER_BODY="$(cat <<EOF
+          LEDGER_BODY="$(cat <<EOF
           ## Published managed-beta probe OCI
 
           - Source commit: \`${GITHUB_SHA}\`
@@ -228,6 +228,7 @@ jobs:
           - Deployment state: artifact published; no external location is implied or certified by this entry
           EOF
           )"
+          export LEDGER_BODY
           python3 - <<'PY' >"$RUNNER_TEMP/oci-ledger-comment.json"
           import json
           import os
