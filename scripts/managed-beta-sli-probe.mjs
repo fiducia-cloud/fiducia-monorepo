@@ -1,10 +1,13 @@
 #!/usr/bin/env node
 
-// DEN-1404: failure-independent external probe producer for SLO-AVAIL-01.
+// DEN-1404 / DEN-1619: failure-independent external probe producer for
+// SLO-AVAIL-01.
 //
 // The probe intentionally emits only bounded, low-cardinality labels. Endpoint,
 // path, organization, project, environment, key, credential, request ID, trace
 // ID, response body, and error text never become metric labels or values.
+// `probe_location` is an opaque reviewed deployment identity, not a hostname,
+// address, cloud account, customer value, or free-form site description.
 //
 // Prometheus counters must be cumulative across one-shot executions. A bounded
 // local JSON state file is therefore mandatory. It is protected by an exclusive
@@ -17,7 +20,7 @@ import { performance } from "node:perf_hooks";
 
 const THIS_FILE = fileURLToPath(import.meta.url);
 const IS_CLI = process.argv[1] && resolve(process.argv[1]) === resolve(THIS_FILE);
-const STATE_SCHEMA_VERSION = 1;
+const STATE_SCHEMA_VERSION = 2;
 const MAX_COUNTER = Number.MAX_SAFE_INTEGER - 1;
 
 export const OPERATION_CLASSES = new Set([
@@ -100,11 +103,12 @@ function escapeLabel(value) {
   return value.replaceAll("\\", "\\\\").replaceAll('"', '\\"').replaceAll("\n", "\\n");
 }
 
-function initialState(cell, operationClass) {
+function initialState(cell, operationClass, probeLocation) {
   return {
     schemaVersion: STATE_SCHEMA_VERSION,
     cell,
     operationClass,
+    probeLocation,
     successTotal: 0,
     failureTotal: 0,
     lastResult: "failure",
@@ -118,12 +122,20 @@ function validCounter(value) {
   return Number.isSafeInteger(value) && value >= 0 && value <= MAX_COUNTER;
 }
 
-export function validateState(state, cell, operationClass) {
+export function validateState(state, cell, operationClass, probeLocation) {
   if (!state || state.schemaVersion !== STATE_SCHEMA_VERSION) {
-    throw new Error("probe state has an unsupported schema version");
+    throw new Error(
+      "probe state has an unsupported schema version; assign a reviewed probe location and migrate the state explicitly",
+    );
   }
-  if (state.cell !== cell || state.operationClass !== operationClass) {
-    throw new Error("probe state identity does not match the configured cell/operation");
+  if (
+    state.cell !== cell ||
+    state.operationClass !== operationClass ||
+    state.probeLocation !== probeLocation
+  ) {
+    throw new Error(
+      "probe state identity does not match the configured cell/operation/location",
+    );
   }
   if (!validCounter(state.successTotal) || !validCounter(state.failureTotal)) {
     throw new Error("probe state contains an invalid cumulative counter");
@@ -145,19 +157,26 @@ export function validateState(state, cell, operationClass) {
   return state;
 }
 
-export async function readProbeState(path, cell, operationClass) {
+export async function readProbeState(path, cell, operationClass, probeLocation) {
   try {
     const parsed = JSON.parse(await readFile(path, "utf8"));
-    return validateState(parsed, cell, operationClass);
+    return validateState(parsed, cell, operationClass, probeLocation);
   } catch (error) {
-    if (error?.code === "ENOENT") return initialState(cell, operationClass);
+    if (error?.code === "ENOENT") {
+      return initialState(cell, operationClass, probeLocation);
+    }
     if (error instanceof SyntaxError) throw new Error("probe state is not valid JSON");
     throw error;
   }
 }
 
 export function recordSample(state, sample) {
-  validateState(state, sample.cell, sample.operationClass);
+  validateState(
+    state,
+    sample.cell,
+    sample.operationClass,
+    sample.probeLocation,
+  );
   const next = { ...state };
   const field = sample.result === "success" ? "successTotal" : "failureTotal";
   if (next[field] >= MAX_COUNTER) {
@@ -168,17 +187,29 @@ export function recordSample(state, sample) {
   next.lastDurationSeconds = sample.durationSeconds;
   next.lastRunUnixtime = sample.timestampSeconds;
   if (sample.result === "success") next.lastSuccessUnixtime = sample.timestampSeconds;
-  return validateState(next, sample.cell, sample.operationClass);
+  return validateState(
+    next,
+    sample.cell,
+    sample.operationClass,
+    sample.probeLocation,
+  );
 }
 
 export function renderPrometheus(state) {
-  validateState(state, state.cell, state.operationClass);
-  const identity = `cell="${escapeLabel(state.cell)}",operation_class="${escapeLabel(
+  validateState(
+    state,
+    state.cell,
     state.operationClass,
-  )}"`;
+    state.probeLocation,
+  );
+  const identity = [
+    `cell="${escapeLabel(state.cell)}"`,
+    `operation_class="${escapeLabel(state.operationClass)}"`,
+    `probe_location="${escapeLabel(state.probeLocation)}"`,
+  ].join(",");
   const lastLabels = `${identity},result="${state.lastResult}"`;
   return [
-    "# HELP fiducia_external_probe_total Cumulative managed-beta external probes by bounded result.",
+    "# HELP fiducia_external_probe_total Cumulative managed-beta external probes by bounded source and result.",
     "# TYPE fiducia_external_probe_total counter",
     `fiducia_external_probe_total{${identity},result="success"} ${state.successTotal}`,
     `fiducia_external_probe_total{${identity},result="failure"} ${state.failureTotal}`,
@@ -239,6 +270,10 @@ export async function runProbe(options) {
     options.operationClass,
     OPERATION_CLASSES,
   );
+  const probeLocation = validateBoundedLabel(
+    "probeLocation",
+    options.probeLocation,
+  );
   const method = required("method", options.method ?? "GET").toUpperCase();
   if (!METHODS.has(method)) throw new Error("method is outside the approved set");
   const timeoutMs = parseStrictInteger(
@@ -252,7 +287,7 @@ export async function runProbe(options) {
 
   const headers = new Headers(options.headers ?? {});
   headers.set("accept", "application/json");
-  headers.set("user-agent", "fiducia-managed-beta-sli-probe/1");
+  headers.set("user-agent", "fiducia-managed-beta-sli-probe/2");
   if (bearer) headers.set("authorization", `Bearer ${bearer}`);
 
   const started = performance.now();
@@ -278,6 +313,7 @@ export async function runProbe(options) {
   return {
     cell,
     operationClass,
+    probeLocation,
     result,
     status,
     durationSeconds: Math.max(0, performance.now() - started) / 1000,
@@ -326,11 +362,25 @@ export async function runAndPersist(options) {
       options.operationClass,
       OPERATION_CLASSES,
     );
+    const probeLocation = validateBoundedLabel(
+      "probeLocation",
+      options.probeLocation,
+    );
     // Validate cumulative authority before issuing any external operation. A
-    // corrupt or mismatched state must not permit an unrecorded read, renewal,
-    // or mutation and then fail only after the request has completed.
-    const prior = await readProbeState(stateFile, cell, operationClass);
-    const sample = await runProbe({ ...options, cell, operationClass });
+    // corrupt, legacy, or mismatched state must not permit an unrecorded read,
+    // renewal, or mutation and then fail only after the request has completed.
+    const prior = await readProbeState(
+      stateFile,
+      cell,
+      operationClass,
+      probeLocation,
+    );
+    const sample = await runProbe({
+      ...options,
+      cell,
+      operationClass,
+      probeLocation,
+    });
     const state = recordSample(prior, sample);
     // Persist the cumulative authority first. If the process crashes before the
     // textfile rename, the next run re-renders the complete cumulative state.
@@ -346,6 +396,7 @@ async function main() {
     endpoint: process.env.FIDUCIA_PROBE_ENDPOINT,
     cell: process.env.FIDUCIA_PROBE_CELL,
     operationClass: process.env.FIDUCIA_PROBE_OPERATION_CLASS ?? "health",
+    probeLocation: process.env.FIDUCIA_PROBE_LOCATION,
     method: process.env.FIDUCIA_PROBE_METHOD ?? "GET",
     timeoutMs: process.env.FIDUCIA_PROBE_TIMEOUT_MS ?? "5000",
     expectedStatuses: process.env.FIDUCIA_PROBE_EXPECT_STATUS,
