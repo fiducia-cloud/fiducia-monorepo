@@ -40,6 +40,18 @@ function required(name, value) {
   return normalized;
 }
 
+function parseStrictInteger(name, value, minimum, maximum) {
+  const normalized = required(name, String(value));
+  if (!/^\d+$/u.test(normalized)) {
+    throw new Error(`${name} must be an integer within ${minimum}..${maximum}`);
+  }
+  const parsed = Number(normalized);
+  if (!Number.isSafeInteger(parsed) || parsed < minimum || parsed > maximum) {
+    throw new Error(`${name} must be an integer within ${minimum}..${maximum}`);
+  }
+  return parsed;
+}
+
 export function validateBoundedLabel(name, value, allowed = null) {
   const normalized = required(name, value).toLowerCase();
   if (!LABEL_VALUE.test(normalized)) {
@@ -57,13 +69,30 @@ export function parseExpectedStatuses(value) {
   if (!value?.trim()) return new Set(Array.from({ length: 100 }, (_, i) => 200 + i));
   const statuses = new Set();
   for (const token of value.split(",")) {
-    const status = Number.parseInt(token.trim(), 10);
+    const normalized = token.trim();
+    if (!/^\d{3}$/u.test(normalized)) {
+      throw new Error("expected statuses must be comma-separated HTTP status integers");
+    }
+    const status = Number(normalized);
     if (!Number.isInteger(status) || status < 100 || status > 599) {
       throw new Error("expected statuses must be comma-separated HTTP status integers");
     }
     statuses.add(status);
   }
   if (statuses.size === 0) throw new Error("at least one expected status is required");
+  return statuses;
+}
+
+export function normalizeExpectedStatuses(value) {
+  if (!(value instanceof Set)) return parseExpectedStatuses(value);
+  if (value.size === 0) throw new Error("at least one expected status is required");
+  const statuses = new Set();
+  for (const status of value) {
+    if (!Number.isInteger(status) || status < 100 || status > 599) {
+      throw new Error("expected statuses must contain only HTTP status integers");
+    }
+    statuses.add(status);
+  }
   return statuses;
 }
 
@@ -212,14 +241,13 @@ export async function runProbe(options) {
   );
   const method = required("method", options.method ?? "GET").toUpperCase();
   if (!METHODS.has(method)) throw new Error("method is outside the approved set");
-  const timeoutMs = Number.parseInt(String(options.timeoutMs ?? 5_000), 10);
-  if (!Number.isInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > MAX_TIMEOUT_MS) {
-    throw new Error(`timeoutMs must be within 100..${MAX_TIMEOUT_MS}`);
-  }
-  const expectedStatuses =
-    options.expectedStatuses instanceof Set
-      ? options.expectedStatuses
-      : parseExpectedStatuses(options.expectedStatuses);
+  const timeoutMs = parseStrictInteger(
+    "timeoutMs",
+    options.timeoutMs ?? 5_000,
+    100,
+    MAX_TIMEOUT_MS,
+  );
+  const expectedStatuses = normalizeExpectedStatuses(options.expectedStatuses);
   const bearer = await readBearerToken(options.bearerFile);
 
   const headers = new Headers(options.headers ?? {});
@@ -292,8 +320,17 @@ export async function withExclusiveLock(path, fn) {
 export async function runAndPersist(options) {
   const stateFile = resolve(required("stateFile", options.stateFile));
   return withExclusiveLock(`${stateFile}.lock`, async () => {
-    const sample = await runProbe(options);
-    const prior = await readProbeState(stateFile, sample.cell, sample.operationClass);
+    const cell = validateBoundedLabel("cell", options.cell);
+    const operationClass = validateBoundedLabel(
+      "operationClass",
+      options.operationClass,
+      OPERATION_CLASSES,
+    );
+    // Validate cumulative authority before issuing any external operation. A
+    // corrupt or mismatched state must not permit an unrecorded read, renewal,
+    // or mutation and then fail only after the request has completed.
+    const prior = await readProbeState(stateFile, cell, operationClass);
+    const sample = await runProbe({ ...options, cell, operationClass });
     const state = recordSample(prior, sample);
     // Persist the cumulative authority first. If the process crashes before the
     // textfile rename, the next run re-renders the complete cumulative state.
