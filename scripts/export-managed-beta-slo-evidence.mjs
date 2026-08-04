@@ -568,7 +568,7 @@ export async function exportEvidence(config, generatedAt = new Date()) {
       config.independenceAttested &&
       config.probeLocations.length >= 2,
     limitations: [
-      "This bundle is not a contractual SLA or a go/no-go authorization.",
+      "This bundle is not a contractual SLA and does not approve a go/no-go decision.",
       "Independent reliability/security review and the broader DEN-1390/DEN-1391 decision bundle remain required.",
       "The exporter records aggregate bounded SLO results and intentionally excludes tenant, credential, endpoint, request, trace, and response content.",
     ],
