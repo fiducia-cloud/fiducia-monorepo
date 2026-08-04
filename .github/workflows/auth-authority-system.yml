@@ -44,12 +44,12 @@ jobs:
           ref: bd718cd72d72aa330534f3688f8fb1ce90c19d10
           path: fiducia-interfaces
 
-      - name: Check out auth authority candidate
+      - name: Check out merged auth authority implementation
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           repository: fiducia-cloud/fiducia-auth.rs
-          ref: agent/den-1391-auth-authority-boundaries
+          ref: 8531219ec3f97ba3e0f945886e1f3f378b9fd459
           path: fiducia-auth.rs
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -68,14 +68,14 @@ jobs:
       - name: Parse E2E source
         run: node --check fiducia-e2e/tests/system/auth-authority.test.mjs
 
-      - name: Format, lint, and test the auth candidate
+      - name: Format, lint, and test the merged auth implementation
         working-directory: fiducia-auth.rs
         run: |
           cargo fmt --all -- --check
           cargo clippy --locked --all-targets -- -D warnings
           cargo test --locked --all-targets
 
-      - name: Build the exact auth candidate
+      - name: Build the exact merged auth implementation
         working-directory: fiducia-auth.rs
         run: cargo build --locked --bin fiducia-auth
 
