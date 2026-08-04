@@ -1,0 +1,94 @@
+name: conformance image
+
+on:
+  pull_request:
+    paths:
+      - "Dockerfile"
+      - ".github/workflows/conformance-image.yml"
+      - "tests/unit/conformance-image.test.mjs"
+      - "tests/smoke.test.mjs"
+      - "tests/helpers.mjs"
+      - "src/**"
+      - "package.json"
+  push:
+    branches: [main]
+    paths:
+      - "Dockerfile"
+      - ".github/workflows/conformance-image.yml"
+      - "tests/unit/conformance-image.test.mjs"
+      - "tests/smoke.test.mjs"
+      - "tests/helpers.mjs"
+      - "src/**"
+      - "package.json"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Validate workflow
+        uses: docker://rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
+        with:
+          args: .github/workflows/conformance-image.yml
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "22.22.1"
+
+      - name: Validate source contract
+        run: node --test tests/unit/conformance-image.test.mjs
+
+      - name: Build pinned conformance image
+        run: |
+          docker build \
+            --pull \
+            --file Dockerfile \
+            --tag fiducia-e2e-conformance:contract \
+            .
+
+      - name: Verify immutable runtime metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(docker image inspect --format '{{.Config.User}}' fiducia-e2e-conformance:contract)" = "node"
+          test "$(docker image inspect --format '{{json .Config.Cmd}}' fiducia-e2e-conformance:contract)" = '["npm","test"]'
+          version="$(docker run --rm \
+            --read-only \
+            --network none \
+            --tmpfs /tmp:rw,noexec,nosuid,size=16m \
+            --entrypoint node \
+            fiducia-e2e-conformance:contract \
+            --version)"
+          test "$version" = "v26.5.1"
+
+      - name: Run dependency-free smoke contract in the image
+        run: |
+          docker run --rm \
+            --read-only \
+            --network none \
+            --tmpfs /tmp:rw,noexec,nosuid,size=16m \
+            --entrypoint node \
+            fiducia-e2e-conformance:contract \
+            --test tests/smoke.test.mjs
+
+      - name: Reject credential-shaped image history
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker history --no-trunc fiducia-e2e-conformance:contract >"$RUNNER_TEMP/conformance-image-history.txt"
+          if grep -Eiq '(ghp_|github_pat_|lin_api_|AGE-SECRET-KEY-|authorization:[[:space:]]*bearer|password=|token=)' "$RUNNER_TEMP/conformance-image-history.txt"; then
+            echo "container history contains credential-shaped material" >&2
+            exit 1
+          fi
