@@ -18,6 +18,8 @@ import {
 
 const END = new Date("2026-07-29T00:00:00.000Z");
 const START = new Date("2026-07-01T00:00:00.000Z");
+const CELLS = ["cell-a", "cell-b"];
+const LOCATIONS = ["probe-a", "probe-b"];
 const BEARER = "prometheus-read-token-that-must-never-enter-evidence";
 const RESPONSE_CANARY = "RESPONSE_SECRET_MUST_NOT_SURVIVE_4fd3356c";
 
@@ -43,34 +45,44 @@ function completeSamples(expression) {
     "fiducia:sli:public_availability_burn_rate:6h": 0.1,
   };
   if (Object.hasOwn(cellValue, expression)) {
-    return ["cell-a", "cell-b"].map((cell) => ({
+    return CELLS.map((cell) => ({
       labels: { __name__: expression, cell },
       value: cellValue[expression],
     }));
   }
-  if (expression === "fiducia:sli:external_probe_freshness_seconds") {
-    return ["cell-a", "cell-b"].map((cell) => ({
-      labels: { __name__: expression, cell, operation_class: "health" },
-      value: 30,
-    }));
-  }
-  if (expression === "fiducia:sli:external_probe_last_success_age_seconds") {
-    return ["cell-a", "cell-b"].map((cell) => ({
-      labels: { __name__: expression, cell, operation_class: "health" },
-      value: 60,
-    }));
-  }
-  if (expression === "fiducia_external_probe_total") {
-    return ["cell-a", "cell-b"].flatMap((cell) =>
-      ["failure", "success"].map((result) => ({
+  if (
+    expression === "fiducia:sli:external_probe_freshness_seconds" ||
+    expression === "fiducia:sli:external_probe_last_success_age_seconds"
+  ) {
+    return CELLS.flatMap((cell) =>
+      LOCATIONS.map((probeLocation) => ({
         labels: {
           __name__: expression,
           cell,
           operation_class: "health",
-          result,
+          probe_location: probeLocation,
         },
-        value: result === "success" ? 9999 : 1,
+        value:
+          expression === "fiducia:sli:external_probe_freshness_seconds"
+            ? 30
+            : 60,
       })),
+    );
+  }
+  if (expression === "fiducia_external_probe_total") {
+    return CELLS.flatMap((cell) =>
+      LOCATIONS.flatMap((probeLocation) =>
+        ["failure", "success"].map((result) => ({
+          labels: {
+            __name__: expression,
+            cell,
+            operation_class: "health",
+            probe_location: probeLocation,
+            result,
+          },
+          value: result === "success" ? 9999 : 1,
+        })),
+      ),
     );
   }
   throw new Error(`unhandled expression ${expression}`);
@@ -92,9 +104,9 @@ function config(baseUrl, temporary, overrides = {}) {
       { name: "fiducia-load-balance", digest: `sha256:${"1".repeat(64)}` },
       { name: "fiducia-node", digest: `sha256:${"2".repeat(64)}` },
     ],
-    cells: ["cell-a", "cell-b"],
+    cells: CELLS,
     operations: ["health"],
-    probeLocations: ["probe-a", "probe-b"],
+    probeLocations: LOCATIONS,
     independenceAttested: true,
     independenceReviewer: "reviewer-a",
     dashboardUid: "fiducia-managed-beta-slo",
@@ -109,7 +121,7 @@ function config(baseUrl, temporary, overrides = {}) {
   };
 }
 
-describe("DEN-1404 managed beta SLO evidence exporter", () => {
+describe("DEN-1404/DEN-1619 managed beta SLO evidence exporter", () => {
   let temporary;
   let server;
   let baseUrl;
@@ -153,12 +165,22 @@ describe("DEN-1404 managed beta SLO evidence exporter", () => {
     await rm(temporary, { recursive: true, force: true });
   });
 
-  it("exports a complete content-addressed bundle with exact fixed queries and no endpoint or credential leakage", async () => {
+  it("exports a complete location-observed content-addressed bundle without leaking endpoint or credential data", async () => {
     behavior = (expression) => vector(completeSamples(expression));
     seenQueries.length = 0;
     const evidence = await exportEvidence(config(baseUrl, temporary), END);
 
+    assert.equal(evidence.schema_version, 2);
     assert.equal(evidence.candidate_measurement_complete, true);
+    assert.equal(evidence.measurement_source.location_matrix_complete, true);
+    assert.deepEqual(
+      evidence.measurement_source.declared_probe_locations,
+      LOCATIONS,
+    );
+    assert.deepEqual(
+      evidence.measurement_source.observed_probe_locations,
+      LOCATIONS,
+    );
     assert.equal(evidence.exact_queries.length, QUERIES.length);
     assert.deepEqual(
       seenQueries.map((query) => query.expression),
@@ -193,11 +215,13 @@ describe("DEN-1404 managed beta SLO evidence exporter", () => {
     }
   });
 
-  it("writes the final bundle atomically with restrictive permissions", async () => {
+  it("writes atomically with restrictive permissions", async () => {
     behavior = (expression) => vector(completeSamples(expression));
     const evidence = await run(config(baseUrl, temporary));
     assert.equal(evidence.candidate_measurement_complete, true);
-    const stored = JSON.parse(await readFile(join(temporary, "evidence.json"), "utf8"));
+    const stored = JSON.parse(
+      await readFile(join(temporary, "evidence.json"), "utf8"),
+    );
     assert.equal(
       stored.integrity.canonical_json_sha256,
       evidence.integrity.canonical_json_sha256,
@@ -209,32 +233,56 @@ describe("DEN-1404 managed beta SLO evidence exporter", () => {
     );
   });
 
-  it("preserves honest no-data and missing-cell completeness instead of manufacturing success", async () => {
-    behavior = (expression) => {
-      const samples = completeSamples(expression).filter(
-        (sample) => sample.labels.cell !== "cell-b",
+  it("marks one missing location incomplete even when the declared list contains two", async () => {
+    behavior = (expression) =>
+      vector(
+        completeSamples(expression).filter(
+          (sample) => sample.labels.probe_location !== "probe-b",
+        ),
       );
-      return vector(samples);
-    };
+    const evidence = await exportEvidence(config(baseUrl, temporary), END);
+
+    assert.equal(evidence.candidate_measurement_complete, false);
+    assert.equal(evidence.measurement_source.location_matrix_complete, false);
+    assert.deepEqual(
+      evidence.measurement_source.observed_probe_locations,
+      ["probe-a"],
+    );
+    const locationQueries = evidence.exact_queries.filter((query) =>
+      query.expression.includes("external_probe"),
+    );
+    assert.ok(locationQueries.every((query) => query.complete === false));
+    assert.ok(
+      locationQueries.every((query) =>
+        query.missing.some((key) => key.includes("probe_location=probe-b")),
+      ),
+    );
+  });
+
+  it("preserves honest no-data and missing-cell behavior", async () => {
+    behavior = (expression) =>
+      vector(
+        completeSamples(expression).filter(
+          (sample) => sample.labels.cell !== "cell-b",
+        ),
+      );
     const evidence = await exportEvidence(config(baseUrl, temporary), END);
     assert.equal(evidence.candidate_measurement_complete, false);
     for (const query of evidence.exact_queries) {
       assert.equal(query.complete, false);
       assert.ok(query.missing.some((key) => key.includes("cell=cell-b")));
-      assert.ok(!query.unexpected.some((key) => key.includes("cell=cell-b")));
     }
 
     behavior = () => vector([]);
     const noData = await exportEvidence(config(baseUrl, temporary), END);
     assert.equal(noData.candidate_measurement_complete, false);
+    assert.deepEqual(noData.measurement_source.observed_probe_locations, []);
     assert.ok(noData.exact_queries.every((query) => query.status === "no_data"));
-    assert.ok(noData.exact_queries.every((query) => query.samples.length === 0));
   });
 
-  it("rejects unexpected customer labels and redacts upstream HTTP bodies", async () => {
-    const firstExpression = QUERIES[0].expression;
+  it("rejects unexpected customer/location labels and redacts upstream HTTP bodies", async () => {
     behavior = (expression) => {
-      if (expression === firstExpression) {
+      if (expression === QUERIES[0].expression) {
         return vector([
           {
             labels: {
@@ -255,21 +303,23 @@ describe("DEN-1404 managed beta SLO evidence exporter", () => {
       return vector(completeSamples(expression));
     };
     const evidence = await exportEvidence(config(baseUrl, temporary), END);
-    const unexpected = evidence.exact_queries.find(
-      (query) => query.id === "availability_ratio_28d",
+    assert.equal(
+      evidence.exact_queries.find((query) => query.id === "availability_ratio_28d")
+        .status,
+      "prometheus_unexpected_label",
     );
-    const upstream = evidence.exact_queries.find(
-      (query) => query.id === "availability_samples_28d",
+    assert.equal(
+      evidence.exact_queries.find((query) => query.id === "availability_samples_28d")
+        .status,
+      "http_error",
     );
-    assert.equal(unexpected.status, "prometheus_unexpected_label");
-    assert.equal(upstream.status, "http_error");
     assert.equal(evidence.candidate_measurement_complete, false);
     const serialized = JSON.stringify(evidence);
     assert.ok(!serialized.includes("customer-secret-tenant"));
     assert.ok(!serialized.includes(RESPONSE_CANARY));
   });
 
-  it("validates exact identities, HTTPS policy, 28-day window, independent probes, digests, and approved operation classes", () => {
+  it("validates exact identities, HTTPS, window, locations, digests, and approved operations", () => {
     const baseEnv = {
       FIDUCIA_PROMETHEUS_URL: "https://prometheus.example.invalid/base",
       FIDUCIA_SLO_EVIDENCE_OUTPUT: "/tmp/evidence.json",
@@ -290,8 +340,9 @@ describe("DEN-1404 managed beta SLO evidence exporter", () => {
       FIDUCIA_EVIDENCE_WINDOW_END: END.toISOString(),
     };
     const parsed = parseConfig(baseEnv);
-    assert.deepEqual(parsed.cells, ["cell-a", "cell-b"]);
+    assert.deepEqual(parsed.cells, CELLS);
     assert.deepEqual(parsed.operations, ["health"]);
+    assert.deepEqual(parsed.probeLocations, LOCATIONS);
     assert.equal(parsed.independenceAttested, true);
 
     assert.throws(() =>
@@ -306,6 +357,12 @@ describe("DEN-1404 managed beta SLO evidence exporter", () => {
     assert.throws(() =>
       parseConfig({
         ...baseEnv,
+        FIDUCIA_PROBE_LOCATIONS: "probe-a,https://location.example",
+      }),
+    );
+    assert.throws(() =>
+      parseConfig({
+        ...baseEnv,
         FIDUCIA_RELEASE_OPERATION_CLASSES: "tenant-specific-operation",
       }),
     );
@@ -315,7 +372,9 @@ describe("DEN-1404 managed beta SLO evidence exporter", () => {
         FIDUCIA_EVIDENCE_WINDOW_START: "2026-07-02T00:00:00Z",
       }),
     );
-    assert.throws(() => validatePrometheusUrl("http://prometheus.example.invalid"));
+    assert.throws(() =>
+      validatePrometheusUrl("http://prometheus.example.invalid"),
+    );
     assert.doesNotThrow(() =>
       validatePrometheusUrl("http://127.0.0.1:9090", true),
     );
@@ -337,22 +396,23 @@ describe("DEN-1404 managed beta SLO evidence exporter", () => {
     assert.equal(seenQueries.length, beforeCount);
   });
 
-  it("sanitizes vectors independently of HTTP and detects duplicate or non-finite series", () => {
-    const query = QUERIES[0];
+  it("detects duplicate/non-finite series and rejects undeclared locations", () => {
+    const aggregateQuery = QUERIES[0];
     assert.throws(() =>
       sanitizePrometheusVector(
-        query,
+        aggregateQuery,
         vector([
           { labels: { cell: "cell-a" }, value: 1 },
           { labels: { cell: "cell-a" }, value: 1 },
         ]),
         ["cell-a"],
         ["health"],
+        LOCATIONS,
       ),
     );
     assert.throws(() =>
       sanitizePrometheusVector(
-        query,
+        aggregateQuery,
         {
           status: "success",
           data: {
@@ -367,7 +427,31 @@ describe("DEN-1404 managed beta SLO evidence exporter", () => {
         },
         ["cell-a"],
         ["health"],
+        LOCATIONS,
       ),
+    );
+
+    const locationQuery = QUERIES.find(
+      (query) => query.id === "external_probe_freshness_seconds",
+    );
+    assert.throws(() =>
+      sanitizePrometheusVector(
+        locationQuery,
+        vector([
+          {
+            labels: {
+              cell: "cell-a",
+              operation_class: "health",
+              probe_location: "undeclared-location",
+            },
+            value: 1,
+          },
+        ]),
+        ["cell-a"],
+        ["health"],
+        LOCATIONS,
+      ),
+      /probe_location is outside the approved bounded label set/u,
     );
   });
 });

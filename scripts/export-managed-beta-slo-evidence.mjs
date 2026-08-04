@@ -1,14 +1,15 @@
 #!/usr/bin/env node
 
-// DEN-1404: bounded evidence export for the managed-public-beta availability
-// SLO. The exporter sends fixed PromQL expressions in POST bodies, validates
-// every returned label against a low-cardinality allowlist, records exact
-// release/config identities, and writes an atomic content-addressed JSON bundle.
+// DEN-1404 / DEN-1619: bounded exact-candidate evidence export for the managed
+// public-beta availability SLO. The exporter sends a fixed reviewed PromQL set
+// in POST bodies, validates every returned label against a low-cardinality
+// allowlist, proves the declared probe-location matrix is actually observed,
+// records exact release identities, and writes atomic content-addressed JSON.
 //
-// It deliberately does not certify a release. `candidate_measurement_complete`
-// means only that the declared sources returned a complete bounded matrix for a
-// 28-day window and the operator supplied the required identities/attestation.
-// Independent go/no-go review remains outside this process.
+// It deliberately does not certify a release. A complete candidate measurement
+// means only that all declared sources were observed for the completed window
+// and the required independence attestation was supplied. Independent go/no-go
+// review remains outside this process.
 
 import { createHash } from "node:crypto";
 import { open, readFile, rename, unlink, writeFile } from "node:fs/promises";
@@ -17,9 +18,9 @@ import { fileURLToPath } from "node:url";
 
 const THIS_FILE = fileURLToPath(import.meta.url);
 const IS_CLI = process.argv[1] && resolve(process.argv[1]) === resolve(THIS_FILE);
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
-const MAX_SERIES_PER_QUERY = 512;
+const MAX_SERIES_PER_QUERY = 2048;
 const MAX_LIST_ITEMS = 64;
 const MAX_TIMEOUT_MS = 30_000;
 const MIN_WINDOW_SECONDS = 28 * 24 * 60 * 60;
@@ -79,22 +80,22 @@ export const QUERIES = Object.freeze([
     id: "external_probe_freshness_seconds",
     slo: "SLO-AVAIL-01",
     expression: "fiducia:sli:external_probe_freshness_seconds",
-    dimensions: ["cell", "operation_class"],
-    expected: "cell_operation",
+    dimensions: ["cell", "operation_class", "probe_location"],
+    expected: "cell_operation_location",
   },
   {
     id: "external_probe_last_success_age_seconds",
     slo: "SLO-AVAIL-01",
     expression: "fiducia:sli:external_probe_last_success_age_seconds",
-    dimensions: ["cell", "operation_class"],
-    expected: "cell_operation",
+    dimensions: ["cell", "operation_class", "probe_location"],
+    expected: "cell_operation_location",
   },
   {
     id: "external_probe_cumulative_totals",
     slo: "SLO-AVAIL-01",
     expression: "fiducia_external_probe_total",
-    dimensions: ["cell", "operation_class", "result"],
-    expected: "cell_operation_result",
+    dimensions: ["cell", "operation_class", "probe_location", "result"],
+    expected: "cell_operation_location_result",
   },
 ]);
 
@@ -257,19 +258,27 @@ async function boundedResponseText(response) {
   return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))).toString("utf8");
 }
 
-function expectedKeys(kind, cells, operations) {
+function expectedKeys(kind, cells, operations, locations) {
   switch (kind) {
     case "cell":
       return cells.map((cell) => `cell=${cell}`);
-    case "cell_operation":
-      return cells.flatMap((cell) =>
-        operations.map((operation) => `cell=${cell}|operation_class=${operation}`),
-      );
-    case "cell_operation_result":
+    case "cell_operation_location":
       return cells.flatMap((cell) =>
         operations.flatMap((operation) =>
-          ["failure", "success"].map(
-            (result) => `cell=${cell}|operation_class=${operation}|result=${result}`,
+          locations.map(
+            (location) =>
+              `cell=${cell}|operation_class=${operation}|probe_location=${location}`,
+          ),
+        ),
+      );
+    case "cell_operation_location_result":
+      return cells.flatMap((cell) =>
+        operations.flatMap((operation) =>
+          locations.flatMap((location) =>
+            ["failure", "success"].map(
+              (result) =>
+                `cell=${cell}|operation_class=${operation}|probe_location=${location}|result=${result}`,
+            ),
           ),
         ),
       );
@@ -282,7 +291,13 @@ function sampleKey(dimensions, labels) {
   return dimensions.map((dimension) => `${dimension}=${labels[dimension]}`).join("|");
 }
 
-export function sanitizePrometheusVector(query, payload, cells, operations) {
+export function sanitizePrometheusVector(
+  query,
+  payload,
+  cells,
+  operations,
+  locations,
+) {
   if (payload?.status !== "success" || payload?.data?.resultType !== "vector") {
     throw new Error("prometheus_invalid_vector_response");
   }
@@ -295,7 +310,12 @@ export function sanitizePrometheusVector(query, payload, cells, operations) {
   const samples = [];
   const observed = new Set();
   for (const row of result) {
-    if (!row || typeof row.metric !== "object" || !Array.isArray(row.value) || row.value.length !== 2) {
+    if (
+      !row ||
+      typeof row.metric !== "object" ||
+      !Array.isArray(row.value) ||
+      row.value.length !== 2
+    ) {
       throw new Error("prometheus_invalid_sample");
     }
     for (const label of Object.keys(row.metric)) {
@@ -305,9 +325,21 @@ export function sanitizePrometheusVector(query, payload, cells, operations) {
     for (const dimension of query.dimensions) {
       const raw = row.metric[dimension];
       if (dimension === "result") {
-        labels[dimension] = boundedLabel(dimension, raw, new Set(["success", "failure"]));
+        labels[dimension] = boundedLabel(
+          dimension,
+          raw,
+          new Set(["success", "failure"]),
+        );
       } else if (dimension === "operation_class") {
-        labels[dimension] = boundedLabel(dimension, raw, APPROVED_OPERATION_CLASSES);
+        labels[dimension] = boundedLabel(
+          dimension,
+          raw,
+          APPROVED_OPERATION_CLASSES,
+        );
+      } else if (dimension === "cell") {
+        labels[dimension] = boundedLabel(dimension, raw, new Set(cells));
+      } else if (dimension === "probe_location") {
+        labels[dimension] = boundedLabel(dimension, raw, new Set(locations));
       } else {
         labels[dimension] = boundedLabel(dimension, raw);
       }
@@ -329,7 +361,12 @@ export function sanitizePrometheusVector(query, payload, cells, operations) {
     ),
   );
 
-  const expected = expectedKeys(query.expected, cells, operations).sort();
+  const expected = expectedKeys(
+    query.expected,
+    cells,
+    operations,
+    locations,
+  ).sort();
   const actual = [...observed].sort();
   const expectedSet = new Set(expected);
   const actualSet = new Set(actual);
@@ -357,12 +394,21 @@ function classifyError(error) {
   return known.has(error?.message) ? error.message : "prometheus_query_failed";
 }
 
-async function queryPrometheus({ baseUrl, bearer, query, time, timeoutMs, cells, operations }) {
+async function queryPrometheus({
+  baseUrl,
+  bearer,
+  query,
+  time,
+  timeoutMs,
+  cells,
+  operations,
+  locations,
+}) {
   const body = new URLSearchParams({ query: query.expression, time: String(time) });
   const headers = new Headers({
     accept: "application/json",
     "content-type": "application/x-www-form-urlencoded",
-    "user-agent": "fiducia-managed-beta-slo-evidence/1",
+    "user-agent": "fiducia-managed-beta-slo-evidence/2",
   });
   if (bearer) headers.set("authorization", `Bearer ${bearer}`);
 
@@ -382,7 +428,12 @@ async function queryPrometheus({ baseUrl, bearer, query, time, timeoutMs, cells,
         expression: query.expression,
         status: "http_error",
         complete: false,
-        missing: expectedKeys(query.expected, cells, operations).sort(),
+        missing: expectedKeys(
+          query.expected,
+          cells,
+          operations,
+          locations,
+        ).sort(),
         unexpected: [],
         samples: [],
       };
@@ -393,7 +444,13 @@ async function queryPrometheus({ baseUrl, bearer, query, time, timeoutMs, cells,
       id: query.id,
       slo: query.slo,
       expression: query.expression,
-      ...sanitizePrometheusVector(query, payload, cells, operations),
+      ...sanitizePrometheusVector(
+        query,
+        payload,
+        cells,
+        operations,
+        locations,
+      ),
     };
   } catch (error) {
     return {
@@ -402,7 +459,12 @@ async function queryPrometheus({ baseUrl, bearer, query, time, timeoutMs, cells,
       expression: query.expression,
       status: classifyError(error),
       complete: false,
-      missing: expectedKeys(query.expected, cells, operations).sort(),
+      missing: expectedKeys(
+        query.expected,
+        cells,
+        operations,
+        locations,
+      ).sort(),
       unexpected: [],
       samples: [],
     };
@@ -439,7 +501,9 @@ export async function withExclusiveLock(path, fn) {
     try {
       handle = await open(lockPath, "wx", 0o600);
     } catch (error) {
-      if (error?.code === "EEXIST") throw new Error("evidence export lock is already held");
+      if (error?.code === "EEXIST") {
+        throw new Error("evidence export lock is already held");
+      }
       throw error;
     }
     await handle.writeFile(`${process.pid}\n${new Date().toISOString()}\n`);
@@ -464,30 +528,44 @@ export function parseConfig(env = process.env) {
     env.FIDUCIA_EVIDENCE_WINDOW_END,
   );
   const cells = parseBoundedList("cells", env.FIDUCIA_RELEASE_CELLS);
-  const operations = parseBoundedList("operation classes", env.FIDUCIA_RELEASE_OPERATION_CLASSES, {
-    allowed: APPROVED_OPERATION_CLASSES,
-  });
-  const probeLocations = parseBoundedList("probe locations", env.FIDUCIA_PROBE_LOCATIONS, {
-    minimum: 2,
-  });
+  const operations = parseBoundedList(
+    "operation classes",
+    env.FIDUCIA_RELEASE_OPERATION_CLASSES,
+    { allowed: APPROVED_OPERATION_CLASSES },
+  );
+  const probeLocations = parseBoundedList(
+    "probe locations",
+    env.FIDUCIA_PROBE_LOCATIONS,
+    { minimum: 2 },
+  );
   const independenceAttested = parseBoolean(
     "FIDUCIA_PROBE_INDEPENDENCE_ATTESTED",
     env.FIDUCIA_PROBE_INDEPENDENCE_ATTESTED,
   );
   const independenceReviewer = independenceAttested
-    ? boundedId("probe independence reviewer", env.FIDUCIA_PROBE_INDEPENDENCE_REVIEWER)
+    ? boundedId(
+        "probe independence reviewer",
+        env.FIDUCIA_PROBE_INDEPENDENCE_REVIEWER,
+      )
     : null;
-  const timeoutMs = Number.parseInt(env.FIDUCIA_SLO_EXPORT_TIMEOUT_MS ?? "10000", 10);
+  const timeoutMs = Number.parseInt(
+    env.FIDUCIA_SLO_EXPORT_TIMEOUT_MS ?? "10000",
+    10,
+  );
   if (!Number.isInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > MAX_TIMEOUT_MS) {
     throw new Error(`export timeout must be within 100..${MAX_TIMEOUT_MS}`);
   }
 
   return {
-    prometheusUrl: validatePrometheusUrl(env.FIDUCIA_PROMETHEUS_URL, allowInsecure),
+    prometheusUrl: validatePrometheusUrl(
+      env.FIDUCIA_PROMETHEUS_URL,
+      allowInsecure,
+    ),
     bearerFile: env.FIDUCIA_PROMETHEUS_BEARER_FILE?.trim() || null,
     output: resolve(required("evidence output", env.FIDUCIA_SLO_EVIDENCE_OUTPUT)),
     lock: resolve(
-      env.FIDUCIA_SLO_EVIDENCE_LOCK?.trim() || `${env.FIDUCIA_SLO_EVIDENCE_OUTPUT}.lock`,
+      env.FIDUCIA_SLO_EVIDENCE_LOCK?.trim() ||
+        `${env.FIDUCIA_SLO_EVIDENCE_OUTPUT}.lock`,
     ),
     timeoutMs,
     decisionId: boundedId("decision id", env.FIDUCIA_EVIDENCE_DECISION_ID),
@@ -495,8 +573,14 @@ export function parseConfig(env = process.env) {
       "Prometheus target id",
       env.FIDUCIA_PROMETHEUS_TARGET_ID,
     ),
-    sourceCommit: requireCommit("source commit", env.FIDUCIA_RELEASE_SOURCE_COMMIT),
-    configCommit: requireCommit("config commit", env.FIDUCIA_RELEASE_CONFIG_COMMIT),
+    sourceCommit: requireCommit(
+      "source commit",
+      env.FIDUCIA_RELEASE_SOURCE_COMMIT,
+    ),
+    configCommit: requireCommit(
+      "config commit",
+      env.FIDUCIA_RELEASE_CONFIG_COMMIT,
+    ),
     rulesCommit: requireCommit("rules commit", env.FIDUCIA_RULES_COMMIT),
     imageDigests: parseImageDigests(env.FIDUCIA_RELEASE_IMAGE_DIGESTS),
     cells,
@@ -526,6 +610,7 @@ export async function exportEvidence(config, generatedAt = new Date()) {
         timeoutMs: config.timeoutMs,
         cells: config.cells,
         operations: config.operations,
+        locations: config.probeLocations,
       }),
     );
   }
@@ -533,6 +618,14 @@ export async function exportEvidence(config, generatedAt = new Date()) {
   const queriesComplete = queries.every(
     (query) => query.status === "success" && query.complete,
   );
+  const observedProbeLocations = [
+    ...new Set(
+      queries
+        .flatMap((query) => query.samples)
+        .map((sample) => sample.labels.probe_location)
+        .filter(Boolean),
+    ),
+  ].sort();
   const unsigned = {
     schema_version: SCHEMA_VERSION,
     evidence_type: "fiducia_managed_beta_slo_measurement",
@@ -558,7 +651,11 @@ export async function exportEvidence(config, generatedAt = new Date()) {
     },
     measurement_source: {
       prometheus_target_id: config.prometheusTargetId,
-      probe_locations: config.probeLocations,
+      declared_probe_locations: config.probeLocations,
+      observed_probe_locations: observedProbeLocations,
+      location_matrix_complete:
+        JSON.stringify(observedProbeLocations) ===
+        JSON.stringify(config.probeLocations),
       independence_attested: config.independenceAttested,
       independence_reviewer: config.independenceReviewer,
     },
@@ -566,10 +663,12 @@ export async function exportEvidence(config, generatedAt = new Date()) {
     candidate_measurement_complete:
       queriesComplete &&
       config.independenceAttested &&
-      config.probeLocations.length >= 2,
+      config.probeLocations.length >= 2 &&
+      JSON.stringify(observedProbeLocations) ===
+        JSON.stringify(config.probeLocations),
     limitations: [
       "This bundle is not a contractual SLA and does not approve a go/no-go decision.",
-      "Independent reliability/security review and the broader DEN-1390/DEN-1391 decision bundle remain required.",
+      "Observed probe_location labels prove distinct metric lineages, not physical failure independence; the attestation and independent review remain required.",
       "The exporter records aggregate bounded SLO results and intentionally excludes tenant, credential, endpoint, request, trace, and response content.",
     ],
   };
@@ -602,7 +701,9 @@ if (IS_CLI) {
   main().catch((error) => {
     // Configuration errors are bounded policy messages. Prometheus URL,
     // credentials, raw API response, and output path are never echoed here.
-    process.stderr.write(`managed-beta SLO evidence export failed: ${error.message}\n`);
+    process.stderr.write(
+      `managed-beta SLO evidence export failed: ${error.message}\n`,
+    );
     process.exitCode = 2;
   });
 }
