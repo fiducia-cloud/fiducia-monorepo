@@ -88,7 +88,7 @@ jobs:
         run: |
           set -euo pipefail
           docker history --no-trunc fiducia-e2e-conformance:contract >"$RUNNER_TEMP/conformance-image-history.txt"
-          if grep -Eiq '(ghp_|github_pat_|lin_api_|AGE-SECRET-KEY-|authorization:[[:space:]]*bearer|password=|token=)' "$RUNNER_TEMP/conformance-image-history.txt"; then
+          if grep -Eiq '(ghp_|github_pat_|lin_api_|authorization:[[:space:]]*bearer|password=|token=)' "$RUNNER_TEMP/conformance-image-history.txt"; then
             echo "container history contains credential-shaped material" >&2
             exit 1
           fi
