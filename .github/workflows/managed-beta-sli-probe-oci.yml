@@ -1,0 +1,200 @@
+name: DEN-1404 managed beta probe OCI
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/managed-beta-sli-probe-oci.yml"
+      - "docker/managed-beta-probe.Dockerfile"
+      - "docs/managed-beta-sli-probe-oci.md"
+      - "scripts/managed-beta-sli-probe.mjs"
+      - "tests/unit/managed-beta-sli-probe-container.test.mjs"
+      - "tests/unit/managed-beta-sli-probe.test.mjs"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/managed-beta-sli-probe-oci.yml"
+      - "docker/managed-beta-probe.Dockerfile"
+      - "docs/managed-beta-sli-probe-oci.md"
+      - "scripts/managed-beta-sli-probe.mjs"
+      - "tests/unit/managed-beta-sli-probe-container.test.mjs"
+      - "tests/unit/managed-beta-sli-probe.test.mjs"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Validate this workflow
+        uses: docker://rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
+        with:
+          args: .github/workflows/managed-beta-sli-probe-oci.yml
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22.22.1"
+
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+
+      - name: Validate source and container contracts
+        run: |
+          node --check scripts/managed-beta-sli-probe.mjs
+          node --test \
+            tests/unit/managed-beta-sli-probe.test.mjs \
+            tests/unit/managed-beta-sli-probe-container.test.mjs
+
+      - name: Build the pinned non-root image
+        run: |
+          docker build \
+            --pull \
+            --file docker/managed-beta-probe.Dockerfile \
+            --tag fiducia-managed-beta-probe:contract \
+            .
+
+      - name: Verify immutable runtime metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(docker image inspect --format '{{.Config.User}}' fiducia-managed-beta-probe:contract)" = '1000:1000'
+          test "$(docker image inspect --format '{{json .Config.Entrypoint}}' fiducia-managed-beta-probe:contract)" = '["node","/opt/fiducia-probe/managed-beta-sli-probe.mjs"]'
+          test "$(docker image inspect --format '{{.Config.WorkingDir}}' fiducia-managed-beta-probe:contract)" = '/opt/fiducia-probe'
+          docker history --no-trunc fiducia-managed-beta-probe:contract >"$RUNNER_TEMP/probe-history.txt"
+          if grep -Eiq '(ghp_|fdc_live_|authorization:[[:space:]]*bearer|password=|token=)' "$RUNNER_TEMP/probe-history.txt"; then
+            echo 'container history contains credential-shaped material' >&2
+            exit 1
+          fi
+
+      - name: Prove fail-closed missing configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          output="$(docker run --rm --read-only --network none fiducia-managed-beta-probe:contract 2>&1)"
+          status=$?
+          set -e
+          test "$status" -eq 2
+          grep -Fq 'managed-beta SLI probe failed: endpoint is required' <<<"$output"
+          if grep -Eiq '(ghp_|fdc_|bearer[[:space:]]|password|token=|tenant_id|org_id)' <<<"$output"; then
+            echo 'fail-closed output contains credential/customer-shaped material' >&2
+            exit 1
+          fi
+
+      - name: Prove read-only cumulative runtime behavior
+        shell: bash
+        run: |
+          set -euo pipefail
+          fixture="$RUNNER_TEMP/probe-http"
+          state="$RUNNER_TEMP/probe-state"
+          mkdir -p "$fixture" "$state"
+          printf 'ok\n' >"$fixture/index.html"
+          sudo chown -R 1000:1000 "$state"
+
+          python3 -m http.server 18080 \
+            --bind 127.0.0.1 \
+            --directory "$fixture" \
+            >"$RUNNER_TEMP/probe-http.log" 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+
+          for _ in $(seq 1 50); do
+            if curl --fail --silent http://127.0.0.1:18080/ >/dev/null; then
+              break
+            fi
+            sleep 0.1
+          done
+          curl --fail --silent http://127.0.0.1:18080/ >/dev/null
+
+          run_probe() {
+            docker run --rm \
+              --read-only \
+              --network host \
+              --tmpfs /tmp:rw,noexec,nosuid,size=8m \
+              --volume "$state:/state" \
+              --env FIDUCIA_PROBE_ENDPOINT=http://127.0.0.1:18080/ \
+              --env FIDUCIA_PROBE_CELL=cell-a \
+              --env FIDUCIA_PROBE_OPERATION_CLASS=health \
+              --env FIDUCIA_PROBE_EXPECT_STATUS=200 \
+              --env FIDUCIA_PROBE_STATE_FILE=/state/probe.json \
+              --env FIDUCIA_PROBE_TEXTFILE=/state/probe.prom \
+              fiducia-managed-beta-probe:contract
+          }
+
+          run_probe
+          run_probe
+
+          grep -Fq 'fiducia_external_probe_total{cell="cell-a",operation_class="health",result="success"} 2' "$state/probe.prom"
+          grep -Fq 'fiducia_external_probe_total{cell="cell-a",operation_class="health",result="failure"} 0' "$state/probe.prom"
+          test "$(stat -c '%a' "$state/probe.json")" = '600'
+          test "$(stat -c '%a' "$state/probe.prom")" = '600'
+          if grep -Fq '127.0.0.1:18080' "$state/probe.prom"; then
+            echo 'metrics leaked the probe endpoint' >&2
+            exit 1
+          fi
+
+      - name: Audit JavaScript dependencies
+        run: npm audit --audit-level=high
+
+  publish:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: .
+          file: docker/managed-beta-probe.Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          pull: true
+          provenance: mode=max
+          sbom: true
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.title=fiducia-managed-beta-probe
+          tags: |
+            ghcr.io/fiducia-cloud/fiducia-managed-beta-probe:${{ github.sha }}
+
+      - name: Record immutable publication identity
+        shell: bash
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          {
+            echo '## Fiducia managed-beta probe OCI'
+            echo
+            echo "- Source commit: \`${GITHUB_SHA}\`"
+            echo "- Image: \`ghcr.io/fiducia-cloud/fiducia-managed-beta-probe@${DIGEST}\`"
+            echo '- Platforms: `linux/amd64`, `linux/arm64`'
+            echo '- Provenance: `mode=max`'
+            echo '- SBOM: enabled'
+          } >>"$GITHUB_STEP_SUMMARY"
