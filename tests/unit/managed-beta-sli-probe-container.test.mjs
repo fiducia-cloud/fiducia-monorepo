@@ -4,6 +4,8 @@ import { readFile } from "node:fs/promises";
 
 const dockerfilePath = "docker/managed-beta-probe.Dockerfile";
 const workflowPath = ".github/workflows/managed-beta-sli-probe-oci.yml";
+const probeSourcePath = "scripts/managed-beta-sli-probe.mjs";
+const runtimeDocPath = "docs/managed-beta-sli-probe-oci.md";
 
 async function text(path) {
   return readFile(path, "utf8");
@@ -49,6 +51,18 @@ describe("DEN-1404 managed beta probe OCI contract", () => {
     ]) {
       assert.ok(!dockerfile.includes(forbidden), `Dockerfile contains ${forbidden}`);
     }
+  });
+
+  it("does not let the probe runtime self-assert monitoring-topology identity", async () => {
+    const [source, docs] = await Promise.all([
+      text(probeSourcePath),
+      text(runtimeDocPath),
+    ]);
+    assert.ok(!source.includes("FIDUCIA_PROBE_LOCATION"));
+    assert.ok(!source.includes('KeyValue::new("probe_location"'));
+    assert.match(docs, /probe does not emit or accept `probe_location`/u);
+    assert.match(docs, /trusted Prometheus scrape\/remote-write boundary/u);
+    assert.match(docs, /honor_labels: false/u);
   });
 
   it("keeps registry publication separate from pull-request validation", async () => {
