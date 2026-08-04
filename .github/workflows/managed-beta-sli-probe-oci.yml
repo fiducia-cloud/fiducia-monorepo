@@ -194,7 +194,7 @@ jobs:
             echo
             echo "- Source commit: \`${GITHUB_SHA}\`"
             echo "- Image: \`ghcr.io/fiducia-cloud/fiducia-managed-beta-probe@${DIGEST}\`"
-            echo '- Platforms: `linux/amd64`, `linux/arm64`'
-            echo '- Provenance: `mode=max`'
-            echo '- SBOM: enabled'
+            echo "- Platforms: \`linux/amd64\`, \`linux/arm64\`"
+            echo "- Provenance: \`mode=max\`"
+            echo "- SBOM: enabled"
           } >>"$GITHUB_STEP_SUMMARY"
