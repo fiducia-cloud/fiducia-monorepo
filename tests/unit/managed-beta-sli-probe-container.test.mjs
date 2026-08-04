@@ -74,4 +74,14 @@ describe("DEN-1404 managed beta probe OCI contract", () => {
     assert.match(workflow, /ghcr\.io\/fiducia-cloud\/fiducia-managed-beta-probe:\$\{\{ github\.sha \}\}/u);
     assert.ok(!workflow.includes(":latest"));
   });
+
+  it("records each successful publication in the bounded repository ledger", async () => {
+    const workflow = await text(workflowPath);
+    assert.match(workflow, /issues: write/u);
+    assert.match(workflow, /LEDGER_ISSUE: "29"/u);
+    assert.match(workflow, /issues\/\$\{LEDGER_ISSUE\}\/comments/u);
+    assert.match(workflow, /GITHUB_RUN_ID/u);
+    assert.match(workflow, /Deployment state: artifact published; no external location is implied or certified/u);
+    assert.ok(!/echo[^\n]*(?:GH_TOKEN|GITHUB_TOKEN)/u.test(workflow));
+  });
 });
