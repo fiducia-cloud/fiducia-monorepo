@@ -158,6 +158,7 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
+      issues: write
       packages: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -205,3 +206,42 @@ jobs:
             echo "- Provenance: \`mode=max\`"
             echo "- SBOM: enabled"
           } >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Append immutable publication ledger
+        shell: bash
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          LEDGER_ISSUE: "29"
+        run: |
+          set -euo pipefail
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          export LEDGER_BODY="$(cat <<EOF
+          ## Published managed-beta probe OCI
+
+          - Source commit: \`${GITHUB_SHA}\`
+          - Image: \`ghcr.io/fiducia-cloud/fiducia-managed-beta-probe@${DIGEST}\`
+          - Platforms: \`linux/amd64\`, \`linux/arm64\`
+          - Provenance: \`mode=max\`
+          - SBOM: enabled
+          - Workflow: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+          - Deployment state: artifact published; no external location is implied or certified by this entry
+          EOF
+          )"
+          python3 - <<'PY' >"$RUNNER_TEMP/oci-ledger-comment.json"
+          import json
+          import os
+
+          print(json.dumps({"body": os.environ["LEDGER_BODY"]}))
+          PY
+          response="$(curl \
+            --fail-with-body \
+            --silent \
+            --show-error \
+            --request POST \
+            --header 'Accept: application/vnd.github+json' \
+            --header "Authorization: Bearer ${GH_TOKEN}" \
+            --header 'X-GitHub-Api-Version: 2022-11-28' \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/issues/${LEDGER_ISSUE}/comments" \
+            --data-binary "@$RUNNER_TEMP/oci-ledger-comment.json")"
+          python3 -c 'import json, sys; comment=json.load(sys.stdin); assert comment["body"].startswith("## Published managed-beta probe OCI")' <<<"$response"
