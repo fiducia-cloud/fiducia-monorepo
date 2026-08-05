@@ -69,7 +69,7 @@ test("submodule declarations stay complete, pinned to main, and backed by gitlin
       }),
   );
 
-  assert.equal(modules.length, 27);
+  assert.equal(modules.length, 25);
   assert.deepEqual(paths, [
     "apps/fiducia-admin.rs",
     "apps/fiducia-ai-agent-bridge.rs",
@@ -77,12 +77,10 @@ test("submodule declarations stay complete, pinned to main, and backed by gitlin
     "apps/fiducia-ai-agent-manager.rs",
     "apps/fiducia-auth.rs",
     "apps/fiducia-brain.rs",
-    "apps/fiducia-cli.rs",
     "apps/fiducia-clients",
     "apps/fiducia-customer.rs",
     "apps/fiducia-e2e",
     "apps/fiducia-edge",
-    "apps/fiducia-infra",
     "apps/fiducia-interfaces",
     "apps/fiducia-lambda-service.rs",
     "apps/fiducia-load-balance.rs",
@@ -106,6 +104,9 @@ test("submodule declarations stay complete, pinned to main, and backed by gitlin
     assert.ok(module.path.startsWith("apps/fiducia-"));
     assert.equal(gitlinks.get(module.path), "160000", `${module.path} must be a pinned gitlink`);
   }
+
+  assert.equal(gitlinks.has("apps/fiducia-cli.rs"), false, "CLI remains independently owned");
+  assert.equal(gitlinks.has("apps/fiducia-infra"), false, "infrastructure remains independently owned");
 });
 
 test("readme and boundary docs classify every app submodule", () => {
