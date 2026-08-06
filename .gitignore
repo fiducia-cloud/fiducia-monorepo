@@ -30,3 +30,7 @@ pkg-node/
 
 # direnv-generated Nix dev-shell cache
 .direnv/
+tmp
+temp
+tmp/worktrees
+temp/worktrees
