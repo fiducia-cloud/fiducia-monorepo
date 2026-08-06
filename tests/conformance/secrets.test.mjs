@@ -72,11 +72,24 @@ describe("end-user secrets over encrypted KV", { skip: NO_ENDPOINT }, () => {
 
     await skipIfUndeployed(t, "GET /v1/kv?prefix=secret/", async () => {
       await c.secretPut(name, marker);
+
+      // The node is the confidentiality boundary. A caller can bypass the
+      // convenience wrapper and use generic KV listing, so the raw response
+      // itself must omit reserved-secret values.
+      const rawListed = await c.kvList("secret/");
+      const rawRow = rawListed.keys?.find((row) => row.key === `secret/${name}`);
+      assert.ok(rawRow, "the raw KV list must include the secret metadata row");
+      assert.equal(rawRow.value, undefined, "the node must omit the secret value");
+      assert.equal(rawRow.value_redacted, true, "the node must mark the omitted value");
+      assert.ok(
+        !JSON.stringify(rawListed).includes(marker),
+        "the raw KV list response must never expose a secret value",
+      );
+
       const listed = await c.secretList();
       const mine = listed.secrets.find((s) => s.name === name || s.name === `secret/${name}`);
       assert.ok(mine, "the secret's name must appear in the list");
-      // Write-only ergonomics: the client strips values; the plaintext must not
-      // appear anywhere in the listing response.
+      // The client also strips values for defense in depth against older nodes.
       assert.ok(
         !JSON.stringify(listed).includes(marker),
         "secretList must never expose a secret value",
