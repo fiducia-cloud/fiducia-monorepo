@@ -76,6 +76,8 @@ response content.
 ## Publication
 
 After this change merges to `main`, the publish job builds and pushes:
+After the source producer PR and this stacked PR merge to `main`, the publish job
+builds and pushes:
 
 ```text
 ghcr.io/fiducia-cloud/fiducia-managed-beta-probe:<full-git-sha>
@@ -101,6 +103,10 @@ The trusted monitoring configuration gives each instance a unique bounded
 `probe_location`. Two replicas sharing one state file are forbidden; two scrape
 targets claiming the same trusted location/cell/operation identity trigger the
 duplicate-series alert in the managed-beta SLO rules.
+Each instance uses a unique bounded `cell`/probe-location identity and its own
+persistent state file. Two replicas sharing one state file are forbidden; two
+replicas claiming the same Prometheus source identity trigger the duplicate
+series alert in the managed-beta SLO rules.
 
 ## Evidence maturity
 
@@ -110,3 +116,5 @@ locations run the digest-pinned image and central Prometheus receives fresh
 cumulative series with trusted scrape-injected location identity. Exact-candidate
 measurement still requires the completed window, evidence exporter, and
 independent review.
+cumulative series. Exact-candidate measurement still requires the completed
+window, evidence exporter, and independent review.
