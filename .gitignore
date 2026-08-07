@@ -16,6 +16,8 @@ keys.txt
 sops-private*.txt
 
 .direnv/
+.external/
+.vendor/.zed/
 
 # Scratch space (git worktrees, build scratch, etc.) — see agents.md
 tmp/

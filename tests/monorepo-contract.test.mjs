@@ -1,7 +1,8 @@
 // Contract tests for the superproject wiring: asserts .gitmodules stays complete
-// and pinned to main, that readme/boundary docs classify every app, that
-// .env.example keeps required (placeholder-only) knobs, and that the ops scripts
-// keep destructive actions manual with dry-run/audit guardrails.
+// and pinned to main, that readme/boundary docs classify every app, that the
+// Zed package never owns CLI/infra, that the external infra source is immutable,
+// that .env.example keeps required (placeholder-only) knobs, and that the ops
+// scripts keep destructive actions manual with dry-run/audit guardrails.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
@@ -97,6 +98,8 @@ test("submodule declarations stay complete, pinned to main, and backed by gitlin
     "apps/fiducia-telemetry.rs",
     "apps/fiducia-test-config",
   ]);
+  assert.ok(!paths.includes("apps/fiducia-cli.rs"));
+  assert.ok(!paths.includes("apps/fiducia-infra"));
 
   for (const module of modules) {
     assert.equal(module.branch, "main", `${module.path} must track main`);
@@ -107,6 +110,27 @@ test("submodule declarations stay complete, pinned to main, and backed by gitlin
 
   assert.equal(gitlinks.has("apps/fiducia-cli.rs"), false, "CLI remains independently owned");
   assert.equal(gitlinks.has("apps/fiducia-infra"), false, "infrastructure remains independently owned");
+});
+
+test("Zed package and Git ownership exclude CLI and infra", () => {
+  const manifest = read(".zpkg.toml");
+  const modules = parseGitmodules();
+  const infraSource = JSON.parse(read("gitops/infra-source.json"));
+
+  assert.match(manifest, /org = "fiducia-cloud"/);
+  assert.match(manifest, /name = "fiducia-monorepo"/);
+  assert.match(manifest, /dir = "\.vendor\/\.zed"/);
+  assert.match(manifest, /\[targets\.repository\]/);
+  assert.doesNotMatch(manifest, /fiducia-(?:cli|infra)/i);
+
+  for (const module of modules) {
+    assert.doesNotMatch(module.path, /fiducia-(?:cli|infra)(?:\.rs)?$/i);
+    assert.doesNotMatch(module.url, /fiducia-(?:cli|infra)(?:\.rs)?(?:\.git)?$/i);
+  }
+
+  assert.equal(infraSource.schema_version, 1);
+  assert.equal(infraSource.repository, "fiducia-cloud/fiducia-infra");
+  assert.match(infraSource.commit, /^[0-9a-f]{40}$/);
 });
 
 test("readme and boundary docs classify every app submodule", () => {
@@ -298,6 +322,10 @@ test("CI and production promotion fail closed on immutable GitOps inputs", () =>
   assert.match(deploy, /environment: prod/);
   assert.match(deploy, /contents: write/);
   assert.match(deploy, /test -n "\$FIDUCIA_SUBMODULE_TOKEN"/);
+  assert.match(deploy, /gitops\/infra-source\.json/);
+  assert.match(deploy, /\.external\/fiducia-infra/);
+  assert.match(deploy, /steps\.infra\.outputs\.commit/);
+  assert.match(deploy, /FIDUCIA_INFRA_PATH/);
   assert.match(deploy, /docker buildx imagetools inspect/);
   assert.match(deploy, /git -C "apps\/\$\{repo\}" rev-parse HEAD/);
   assert.match(deploy, /tools\/gitops-release\.mjs promote/);
@@ -312,6 +340,7 @@ test("CI and production promotion fail closed on immutable GitOps inputs", () =>
 test("Argo CD fans only the production data plane to the three providers", () => {
   const applicationSet = read("gitops/argocd/production-applicationset.yaml");
   const release = JSON.parse(read("gitops/release.json"));
+  const infraSource = JSON.parse(read("gitops/infra-source.json"));
 
   assert.match(applicationSet, /kind: AppProject/);
   assert.match(applicationSet, /kind: ApplicationSet/);
@@ -326,6 +355,10 @@ test("Argo CD fans only the production data plane to the three providers", () =>
   assert.doesNotMatch(applicationSet, /kind: Secret/);
 
   assert.equal(release.schema_version, 1);
+  assert.equal(release.infra_repository, "fiducia-cloud/fiducia-infra");
+  assert.match(release.infra_commit, /^[0-9a-f]{40}$/);
+  assert.equal(infraSource.repository, "fiducia-cloud/fiducia-infra");
+  assert.match(infraSource.commit, /^[0-9a-f]{40}$/);
   assert.deepEqual(release.clusters, ["civo", "hetzner", "vultr"]);
   for (const component of Object.values(release.components)) {
     assert.match(component.commit, /^[0-9a-f]{40}$/);

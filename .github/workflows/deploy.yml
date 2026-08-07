@@ -2,8 +2,9 @@
 #
 # This workflow deliberately has no kubeconfig, cloud credential, `kubectl
 # apply`, or Argo API token. It resolves the reviewed component gitlinks to
-# immutable GHCR digests, renders the three fiducia-infra provider overlays,
-# validates the result, and commits only gitops/release.json + data-plane state.
+# immutable GHCR digests, checks out the separately pinned fiducia-infra source,
+# renders its three provider overlays, validates the result, and commits only
+# gitops/release.json + data-plane state.
 #
 # Required `prod` environment configuration:
 #   - required reviewers and protected-main-only deployment policy;
@@ -27,7 +28,7 @@ jobs:
     timeout-minutes: 60
     environment: prod
     steps:
-      - name: Require private-submodule read token
+      - name: Require private-repository read token
         env:
           FIDUCIA_SUBMODULE_TOKEN: ${{ secrets.FIDUCIA_SUBMODULE_TOKEN }}
         run: test -n "$FIDUCIA_SUBMODULE_TOKEN"
@@ -39,6 +40,32 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.FIDUCIA_SUBMODULE_TOKEN }}
           persist-credentials: false
+      - name: Read immutable infrastructure source
+        id: infra
+        shell: bash
+        run: |
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const source = JSON.parse(fs.readFileSync('gitops/infra-source.json', 'utf8'));
+          if (source.schema_version !== 1) throw new Error('unsupported infra source schema');
+          if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(source.repository)) throw new Error('invalid infra repository');
+          if (!/^[0-9a-f]{40}$/.test(source.commit)) throw new Error('infra commit must be immutable');
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `repository=${source.repository}\ncommit=${source.commit}\n`);
+          NODE
+      - name: Check out pinned infrastructure source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: ${{ steps.infra.outputs.repository }}
+          ref: ${{ steps.infra.outputs.commit }}
+          path: .external/fiducia-infra
+          fetch-depth: 1
+          token: ${{ secrets.FIDUCIA_SUBMODULE_TOKEN }}
+          persist-credentials: false
+      - name: Verify exact infrastructure checkout
+        shell: bash
+        env:
+          EXPECTED_INFRA_COMMIT: ${{ steps.infra.outputs.commit }}
+        run: test "$(git -C .external/fiducia-infra rev-parse HEAD)" = "$EXPECTED_INFRA_COMMIT"
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # 1.95.0
         with:
           toolchain: "1.95.0"
@@ -84,7 +111,7 @@ jobs:
           fi
 
       - name: Validate infrastructure inputs
-        working-directory: apps/fiducia-infra
+        working-directory: .external/fiducia-infra
         run: node tools/render.mjs --check
 
       - name: Resolve immutable image digests
@@ -114,6 +141,8 @@ jobs:
           resolve load_balance ghcr.io/fiducia-cloud/fiducia-load-balance fiducia-load-balance.rs
 
       - name: Render approved GitOps release
+        env:
+          FIDUCIA_INFRA_PATH: .external/fiducia-infra
         run: |
           node tools/gitops-release.mjs promote \
             --source "${GITHUB_SHA}" \
