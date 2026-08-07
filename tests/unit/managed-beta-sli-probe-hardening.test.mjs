@@ -12,7 +12,7 @@ import {
   runProbe,
 } from "../../scripts/managed-beta-sli-probe.mjs";
 
-describe("DEN-1404 managed beta external SLI probe hardening", () => {
+describe("DEN-1404/DEN-1619 managed beta external SLI probe hardening", () => {
   let server;
   let baseUrl;
   let temporary;
@@ -54,6 +54,7 @@ describe("DEN-1404 managed beta external SLI probe hardening", () => {
         endpoint: `${baseUrl}/healthz`,
         cell: "cell-a",
         operationClass: "health",
+        probeLocation: "probe-a",
         timeoutMs: "5000ms",
       }),
       /timeoutMs must be an integer/u,
@@ -71,6 +72,7 @@ describe("DEN-1404 managed beta external SLI probe hardening", () => {
         endpoint: `${baseUrl}/committed-write`,
         cell: "cell-a",
         operationClass: "committed_write",
+        probeLocation: "probe-a",
         method: "POST",
         expectedStatuses: "204",
         stateFile,
@@ -80,14 +82,15 @@ describe("DEN-1404 managed beta external SLI probe hardening", () => {
     assert.equal(requestCount, beforeRequests, "corrupt state must prevent the request");
   });
 
-  it("validates mismatched state identity before issuing an external operation", async () => {
+  it("validates mismatched location identity before issuing an external operation", async () => {
     const stateFile = join(temporary, "mismatched-state.json");
     await writeFile(
       stateFile,
       `${JSON.stringify({
-        schemaVersion: 1,
-        cell: "cell-b",
+        schemaVersion: 2,
+        cell: "cell-a",
         operationClass: "committed_write",
+        probeLocation: "probe-b",
         successTotal: 0,
         failureTotal: 0,
         lastResult: "failure",
@@ -104,12 +107,45 @@ describe("DEN-1404 managed beta external SLI probe hardening", () => {
         endpoint: `${baseUrl}/committed-write`,
         cell: "cell-a",
         operationClass: "committed_write",
+        probeLocation: "probe-a",
         method: "POST",
         expectedStatuses: "204",
         stateFile,
       }),
       /identity does not match/u,
     );
-    assert.equal(requestCount, beforeRequests, "mismatched state must prevent the request");
+    assert.equal(requestCount, beforeRequests, "mismatched location must prevent the request");
+  });
+
+  it("rejects schema-v1 state before issuing an external operation", async () => {
+    const stateFile = join(temporary, "legacy-state.json");
+    await writeFile(
+      stateFile,
+      `${JSON.stringify({
+        schemaVersion: 1,
+        cell: "cell-a",
+        operationClass: "health",
+        successTotal: 200,
+        failureTotal: 2,
+        lastResult: "success",
+        lastDurationSeconds: 0.01,
+        lastRunUnixtime: 100,
+        lastSuccessUnixtime: 100,
+      })}\n`,
+      { mode: 0o600 },
+    );
+    const beforeRequests = requestCount;
+
+    await assert.rejects(
+      runAndPersist({
+        endpoint: `${baseUrl}/healthz`,
+        cell: "cell-a",
+        operationClass: "health",
+        probeLocation: "probe-a",
+        stateFile,
+      }),
+      /migrate the state explicitly/u,
+    );
+    assert.equal(requestCount, beforeRequests, "legacy state must prevent the request");
   });
 });
