@@ -1,0 +1,93 @@
+name: opto-sync wrapper e2e
+
+on:
+  pull_request:
+    paths: ['tests/opto-sync-wrapper/**', '.github/workflows/opto-sync-wrapper-e2e.yml']
+  workflow_dispatch:
+    inputs:
+      live_e2e:
+        description: Run the matching wrapper's frozen install plus native and real-browser conformance
+        required: true
+        default: false
+        type: boolean
+
+permissions: {contents: read}
+concurrency: {group: '${{ github.workflow }}-${{ github.ref }}', cancel-in-progress: true}
+
+env:
+  ZED_CLI_SHA: a850dbcc799aeaccf1093741ab58439a049c14c9
+  ZED_INTERFACES_SHA: c2e049006453c26ca8ca291783f681fce75cb01f
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with: {persist-credentials: false}
+      - shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os, pathlib
+          root=pathlib.Path('tests/opto-sync-wrapper'); profile=json.loads((root/'profile.json').read_text()); suite=(root/'product.e2e.test.mjs').read_text()
+          assert profile['schemaVersion']==1 and profile['repository']==os.environ['GITHUB_REPOSITORY']
+          assert profile['syncRepository'].endswith('-sync') and profile['syncPullRequest']>0 and profile['syncRef'].startswith('agent/den-')
+          assert profile['dependency']=={'package':'opto-sync/opto-sync-clients','range':'^0.2.0'}
+          assert profile['collections'] and len(profile['collections'])==len(set(profile['collections']))
+          assert {'queuedOptimistic','remoteConfirmed'}<=set(profile['writeStrategies'])
+          assert 'indexeddb' in profile['persistence']['web'] and 'sqlite' in profile['persistence']['mobile'] and {'postgres','supabase'}<=set(profile['persistence']['backend'])
+          required={'real-browser-indexeddb-wasm','durable-restart','optimistic-rebase-no-flicker','remote-confirmed-no-premature-view','stable-mutation-id-replay','stale-base-conflict','tombstone-no-resurrection','postgres-supabase-authority','realtime-is-wake-hint'}
+          assert required<=set(profile['requiredScenarios']) and profile['domainGuards']
+          guards=' '.join(profile['domainGuards']).lower(); assert 'customer' in guards and 'admin' in guards and 'separate' in guards
+          assert all(token in suite for token in ('queueMutation(','protocolPushRequest(','pendingMutations(','reconcileIncoming(','indexedDB.deleteDatabase(','SYNC_STATUS.SYNCED'))
+          assert all(value not in json.dumps(profile).lower() for value in ('refs/heads/main','branch = "main"','latest'))
+          PY
+          node --check tests/opto-sync-wrapper/product.e2e.test.mjs
+
+  live-e2e:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.live_e2e }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      SYNC_FLEET_TOKEN: ${{ secrets.SYNC_FLEET_TOKEN }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with: {persist-credentials: false}
+      - id: profile
+        name: Load wrapper identity from the reviewed product profile
+        shell: bash
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          profile=json.load(open('tests/opto-sync-wrapper/profile.json')); print(f"repository={profile['syncRepository']}"); print(f"ref={profile['syncRef']}")
+          PY
+      - name: Require private cross-repository read credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$SYNC_FLEET_TOKEN" || { echo 'SYNC_FLEET_TOKEN is required to certify the wrapper checkout' >&2; exit 1; }
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: ${{ steps.profile.outputs.repository }}
+          ref: ${{ steps.profile.outputs.ref }}
+          path: wrapper
+          token: ${{ secrets.SYNC_FLEET_TOKEN }}
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with: {repository: zed-pkg/zed-cli, ref: '${{ env.ZED_CLI_SHA }}', path: .tools/zed-cli, persist-credentials: false}
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with: {repository: zed-pkg/zed-interfaces, ref: '${{ env.ZED_INTERFACES_SHA }}', path: .tools/zed-interfaces, persist-credentials: false}
+      - run: cargo build --locked --release --manifest-path .tools/zed-cli/Cargo.toml --bin zed
+      - name: Install exactly the wrapper lock and run Opto-Sync conformance
+        shell: bash
+        run: |
+          set -euo pipefail
+          zed="$GITHUB_WORKSPACE/.tools/zed-cli/target/release/zed"; (cd wrapper && "$zed" install --frozen --install-mode copy)
+          python3 - <<'PY'
+          import pathlib,re,tomllib
+          package=next(p for p in tomllib.loads(pathlib.Path('wrapper/.zpkg.lock').read_text()).get('package',[]) if p.get('org')=='opto-sync' and p.get('name')=='opto-sync-clients')
+          assert re.fullmatch(r'[0-9a-f]{64}',package['sha256']); assert package['size']>0 and package['format'] and package['vcs_tag'] and package['source']; assert re.fullmatch(r'[0-9a-f]{40}',package['vcs_commit'])
+          PY
+          client="$GITHUB_WORKSPACE/wrapper/zed_modules/opto-sync/opto-sync-clients/clients/ts"; cd "$client"; npm ci; npm run build; npm run test:node; npx playwright install --with-deps chromium; OPTO_SYNC_REQUIRE_BROWSER=1 npm run test:browser; cp "$GITHUB_WORKSPACE/tests/opto-sync-wrapper/product.e2e.test.mjs" "$client/test/downstream-product.e2e.test.mjs"; OPTO_SYNC_PROFILE="$GITHUB_WORKSPACE/tests/opto-sync-wrapper/profile.json" node --test test/downstream-product.e2e.test.mjs
