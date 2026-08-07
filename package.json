@@ -1,38 +1,38 @@
 {
-  "name": "@fiducia/e2e",
-  "version": "0.1.0",
-  "private": true,
-  "type": "module",
   "description": "Cross-cluster end-to-end + conformance test suite for fiducia.cloud. Node --test specs exercising every coordination primitive plus a multi-cluster quorum/chaos layer. Skips cleanly when no endpoint is configured.",
-  "scripts": {
-    "test": "node --test",
-    "test:conformance": "node --test 'tests/conformance/**/*.test.mjs'",
-    "test:chaos": "node --test 'tests/chaos/**/*.test.mjs'",
-    "test:system": "FIDUCIA_E2E_SYSTEM=1 FIDUCIA_E2E_ALLOW_INSECURE_LOCALHOST=1 node --test --test-concurrency=1 'tests/system/**/*.test.mjs'",
-    "test:system:security": "FIDUCIA_E2E_SYSTEM=1 FIDUCIA_E2E_ALLOW_INSECURE_LOCALHOST=1 node --test --test-concurrency=1 'tests/system/security-boundaries.test.mjs' 'tests/system/kv-isolation.test.mjs' 'tests/system/plaintext-policy.test.mjs'",
-    "test:multicluster": "FIDUCIA_E2E_MULTICLUSTER=1 FIDUCIA_E2E_ALLOW_INSECURE_LOCALHOST=1 node --test 'tests/multicluster/**/*.test.mjs'",
-    "test:webapps": "FIDUCIA_E2E_WEBAPPS=1 node --test 'tests/webapps/**/*.test.mjs'",
-    "test:browser": "FIDUCIA_E2E_BROWSER=1 FIDUCIA_E2E_WEBAPPS=1 node --test --test-concurrency=1 'tests/browser/**/*.test.mjs'",
-    "test:smoke": "node --test tests/smoke.test.mjs",
-    "test:selenium-grid": "node scripts/selenium-grid-smoke.mjs",
-    "check:secrets": "node scripts/check-secret-policy.mjs",
-    "test:secrets": "node --test tests/secret-policy.test.mjs",
-    "test:sops": "bash scripts/sops-ephemeral-roundtrip.sh",
-    "proof:hetzner": "FIDUCIA_E2E_ALLOW_INSECURE_LOCALHOST=1 node scripts/prove-hetzner.mjs",
-    "lint": "node scripts/lint.mjs",
-    "test:browser:playwright": "FIDUCIA_E2E_BROWSER=1 FIDUCIA_E2E_WEBAPPS=1 node --test --test-concurrency=1 'tests/browser/playwright/**/*.test.mjs'",
-    "test:browser:puppeteer": "FIDUCIA_E2E_BROWSER=1 FIDUCIA_E2E_WEBAPPS=1 node --test --test-concurrency=1 'tests/browser/puppeteer/**/*.test.mjs'",
-    "test:browser:selenium": "FIDUCIA_E2E_BROWSER=1 FIDUCIA_E2E_WEBAPPS=1 node --test --test-concurrency=1 'tests/browser/selenium/**/*.test.mjs'",
-    "test:chaos:browser": "FIDUCIA_E2E_BROWSER=1 node --test --test-concurrency=1 'tests/chaos/selenium/**/*.test.mjs' 'tests/chaos/playwright/**/*.test.mjs' 'tests/chaos/puppeteer/**/*.test.mjs'",
-    "test:multicluster:browser": "FIDUCIA_E2E_BROWSER=1 FIDUCIA_E2E_MULTICLUSTER=1 node --test --test-concurrency=1 'tests/multicluster/selenium/**/*.test.mjs' 'tests/multicluster/playwright/**/*.test.mjs' 'tests/multicluster/puppeteer/**/*.test.mjs'"
-  },
-  "engines": {
-    "node": ">=22"
-  },
   "devDependencies": {
     "@fiducia/test-config": "file:../fiducia-test-config",
     "playwright": "^1.61.1",
     "puppeteer": "^25.3.0",
     "selenium-webdriver": "^4.46.0"
-  }
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "name": "@fiducia/e2e",
+  "private": true,
+  "scripts": {
+    "check:secrets": "node scripts/check-secret-policy.mjs",
+    "lint": "node scripts/lint.mjs",
+    "proof:hetzner": "FIDUCIA_E2E_ALLOW_INSECURE_LOCALHOST=1 node scripts/prove-hetzner.mjs",
+    "test": "node --test",
+    "test:browser": "FIDUCIA_E2E_BROWSER=1 FIDUCIA_E2E_WEBAPPS=1 node --test --test-concurrency=1 'tests/browser/**/*.test.mjs'",
+    "test:browser:playwright": "FIDUCIA_E2E_BROWSER=1 FIDUCIA_E2E_WEBAPPS=1 node --test --test-concurrency=1 'tests/browser/playwright/**/*.test.mjs'",
+    "test:browser:puppeteer": "FIDUCIA_E2E_BROWSER=1 FIDUCIA_E2E_WEBAPPS=1 node --test --test-concurrency=1 'tests/browser/puppeteer/**/*.test.mjs'",
+    "test:browser:selenium": "FIDUCIA_E2E_BROWSER=1 FIDUCIA_E2E_WEBAPPS=1 node --test --test-concurrency=1 'tests/browser/selenium/**/*.test.mjs'",
+    "test:chaos": "node --test 'tests/chaos/**/*.test.mjs'",
+    "test:chaos:browser": "FIDUCIA_E2E_BROWSER=1 node --test --test-concurrency=1 'tests/chaos/selenium/**/*.test.mjs' 'tests/chaos/playwright/**/*.test.mjs' 'tests/chaos/puppeteer/**/*.test.mjs'",
+    "test:conformance": "node --test 'tests/conformance/**/*.test.mjs'",
+    "test:multicluster": "FIDUCIA_E2E_MULTICLUSTER=1 FIDUCIA_E2E_ALLOW_INSECURE_LOCALHOST=1 node --test 'tests/multicluster/**/*.test.mjs'",
+    "test:multicluster:browser": "FIDUCIA_E2E_BROWSER=1 FIDUCIA_E2E_MULTICLUSTER=1 node --test --test-concurrency=1 'tests/multicluster/selenium/**/*.test.mjs' 'tests/multicluster/playwright/**/*.test.mjs' 'tests/multicluster/puppeteer/**/*.test.mjs'",
+    "test:secrets": "node --test tests/secret-policy.test.mjs",
+    "test:selenium-grid": "node scripts/selenium-grid-smoke.mjs",
+    "test:smoke": "node --test tests/smoke.test.mjs",
+    "test:sops": "bash scripts/sops-ephemeral-roundtrip.sh",
+    "test:system": "FIDUCIA_E2E_SYSTEM=1 FIDUCIA_E2E_ALLOW_INSECURE_LOCALHOST=1 node --test --test-concurrency=1 'tests/system/**/*.test.mjs'",
+    "test:system:security": "FIDUCIA_E2E_SYSTEM=1 FIDUCIA_E2E_ALLOW_INSECURE_LOCALHOST=1 node --test --test-concurrency=1 'tests/system/security-boundaries.test.mjs' 'tests/system/kv-isolation.test.mjs' 'tests/system/plaintext-policy.test.mjs'",
+    "test:webapps": "FIDUCIA_E2E_WEBAPPS=1 node --test 'tests/webapps/**/*.test.mjs'"
+  },
+  "type": "module",
+  "version": "0.1.0"
 }
