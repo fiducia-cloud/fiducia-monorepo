@@ -28,6 +28,37 @@ function packageInstalled(name) {
   return existsSync(join(E2E_ROOT, "node_modules", name, "package.json"));
 }
 
+/**
+ * Normalize one browser-control or public-target origin. These values are often
+ * supplied by CI/tunnel configuration, so fail before a browser is launched if
+ * they contain credentials, paths, query strings, fragments, or a protocol the
+ * caller did not explicitly allow.
+ */
+export function normalizeBrowserOrigin(value, {
+  label = "browser origin",
+  protocols = ["http:", "https:"],
+} = {}) {
+  const raw = String(value ?? "").trim();
+  if (!raw) throw new Error(`${label} is empty`);
+
+  let url;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error(`${label} is not a valid URL`);
+  }
+  if (!protocols.includes(url.protocol)) {
+    throw new Error(`${label} must use ${protocols.join(" or ")}`);
+  }
+  if (url.username || url.password) {
+    throw new Error(`${label} must not contain credentials`);
+  }
+  if (url.pathname !== "/" || url.search || url.hash) {
+    throw new Error(`${label} must be an origin without a path, query, or fragment`);
+  }
+  return url.origin;
+}
+
 /** Why the browser suite cannot run here, or `false` if it can (node:test
  *  `{ skip }` shape — never null, which would skip yet still run hooks). */
 export function browserSkipReason({ requireStack = true } = {}) {
