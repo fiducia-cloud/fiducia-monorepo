@@ -22,10 +22,6 @@
 	path = apps/fiducia-edge
 	url = git@github.com:fiducia-cloud/fiducia-edge
 	branch = main
-[submodule "apps/fiducia-infra"]
-	path = apps/fiducia-infra
-	url = git@github.com:fiducia-cloud/fiducia-infra
-	branch = main
 [submodule "apps/fiducia-interfaces"]
 	path = apps/fiducia-interfaces
 	url = git@github.com:fiducia-cloud/fiducia-interfaces
