@@ -1,12 +1,11 @@
 {
-  "schema_version": 1,
-  "contract_issue": "DEN-1390",
   "allowed_source_statuses": [
     "specified",
     "instrumented",
     "queryable",
     "measured"
   ],
+  "contract_issue": "DEN-1390",
   "label_policy": {
     "allowed_grouping_labels": [
       "probe_location",
@@ -40,6 +39,7 @@
     ],
     "note": "The managed-beta SLO layer is trusted probe-location/cell/operation aggregate telemetry. probe_location is injected by reviewed Prometheus scrape configuration, never self-asserted by the probe. Customer identifiers and unbounded resource names belong only in access-controlled audit/support systems, never Prometheus labels."
   },
+  "schema_version": 1,
   "slos": [
     {
       "id": "SLO-AVAIL-01",

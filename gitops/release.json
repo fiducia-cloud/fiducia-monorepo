@@ -1,6 +1,7 @@
 {
   "schema_version": 1,
   "source_pin": "d12b5bdf4012d6f79456ced119875b88c40d490d",
+  "infra_repository": "fiducia-cloud/fiducia-infra",
   "infra_commit": "1ecc1fa71e9ab1710806aa15b15487821757b988",
   "clusters": [
     "civo",

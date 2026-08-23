@@ -1,9 +1,17 @@
 # Repository Boundaries
 
 `fiducia-monorepo` is the integration and GitOps superproject and is intended to
-be private. It pins every Fiducia app repository to exact commits under `apps/`,
-but it is not the source of truth for component ownership. Each app repo keeps
-its own visibility, history, CI, issue surface, and release permissions.
+be private. It pins 25 Fiducia runtime, service, SDK, and contract repositories
+to exact commits under `apps/`, but it is not the source of truth for component
+ownership. Each repository keeps its own visibility, history, CI, issue surface,
+and release permissions.
+
+The independently installable `fiducia-cli.rs` repository and the private
+`fiducia-infra` repository are deliberately not submodules or Zed dependencies.
+The deploy workflow consumes infrastructure only through the immutable
+repository/commit document at `gitops/infra-source.json` and verifies a separate
+checkout before rendering. This preserves a reviewed production source without
+making infrastructure part of the monorepo ownership graph.
 
 This separation lets Fiducia make selected components open source without
 exposing private control-plane, deployment, customer, or security-sensitive
@@ -21,7 +29,8 @@ Public or public-ready repositories:
 - `fiducia-test-config`: shared `node --test` browser-test harness and
   tsconfig/eslint presets (`@fiducia/test-config`). Dev-tooling only, no
   product or control-plane code — public-ready like `fiducia-interfaces`.
-- `fiducia-cli.rs`: developer CLI and closest-region tooling.
+- `fiducia-cli.rs`: developer CLI and closest-region tooling. It is packaged and
+  installed independently and is not imported by the monorepo.
 - `fiducia-mcp-server.rs`: read-only MCP server (`fiducia-mcp`, stdio) giving
   MCP-capable agents diagnostics over brain/node/agent-control-plane plus an
   embedded repo map; no mutating tools, public-ready.
@@ -40,8 +49,9 @@ Public or public-ready repositories:
 
 Private repositories by default:
 
-- `fiducia-monorepo`: all-up GitOps pins, including private submodules.
+- `fiducia-monorepo`: all-up GitOps pins, including private service submodules.
 - `fiducia-infra`: cluster topology, generated deployment state, and ops docs.
+  It remains external to the monorepo and is selected by immutable commit.
 - `fiducia-node.rs`: core coordination engine and shard internals.
 - `fiducia-brain.rs`: control plane and placement logic.
 - `fiducia-load-balance.rs`: leader-routing and fleet topology behavior.
@@ -72,11 +82,12 @@ and automation; this code audit therefore reports the mismatch without changing
 GitHub settings.
 
 Trusted `main` fleet-audit runs and production checkout use a read-only
-fine-grained `FIDUCIA_SUBMODULE_TOKEN` so private submodules are never silently
-omitted from a deployable-state audit. Public PR contract CI intentionally
-initializes only `fiducia-interfaces` and `fiducia-sync`; it still verifies all
-27 declarations as exact gitlinks without requesting private repository data.
-The token belongs in GitHub Environments/secrets, never in this repository.
+fine-grained `FIDUCIA_SUBMODULE_TOKEN` so private service submodules and the
+separately pinned infra repository are never silently omitted from a deployable
+state audit. Public PR contract CI intentionally initializes only
+`fiducia-interfaces` and `fiducia-sync`; it still verifies all 25 declarations
+as exact gitlinks without requesting private repository data. The token belongs
+in GitHub Environments/secrets, never in this repository.
 
 ## Rules
 
@@ -85,12 +96,16 @@ The token belongs in GitHub Environments/secrets, never in this repository.
   for public consumption.
 - Use a separate public-only superproject if contributors need a single checkout
   across public components.
+- Keep `fiducia-cli.rs` and `fiducia-infra` out of both `.gitmodules` and the
+  monorepo's Zed dependencies.
+- Update `gitops/infra-source.json` through review whenever production should
+  consume a different infrastructure commit; never use a branch or tag there.
 - Do not commit real `.env*` files, private keys, tokens, certificates, or
   generated secret bundles. Use `.env.example` for placeholders and keep real
   values in ignored local files or secret managers.
-- Treat submodule pins as deployable state. A component change is not deployable
-  through GitOps until the component repo is pushed and the superproject pin is
-  updated.
+- Treat service submodule pins and the external infra source commit as
+  deployable state. A component change is not deployable through GitOps until
+  the component repo is pushed and the appropriate reviewed pin is updated.
 - Open-source candidates should keep public contracts in `fiducia-interfaces`
   and SDK repos. Private repos may consume those contracts without leaking
   implementation details back into public history.
