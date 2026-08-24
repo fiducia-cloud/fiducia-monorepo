@@ -134,7 +134,7 @@ test("Zed package and Git ownership exclude CLI and infra", () => {
 });
 
 test("readme and boundary docs classify every app submodule", () => {
-  const readme = read("readme.md");
+  const readme = read("README.md");
   const boundaries = read("docs/repo-boundaries.md");
 
   for (const module of parseGitmodules()) {
@@ -215,14 +215,21 @@ test("monorepo scripts keep destructive actions manual and include dry-run/audit
     "check-interface-consumers.sh",
     "checkout-feature-branch.sh",
     "pin-submodules.sh",
+    "sops-entrypoint.sh",
   ]);
 
-  for (const script of scripts) {
+  const repositoryScripts = scripts.filter((script) => script !== "sops-entrypoint.sh");
+  for (const script of repositoryScripts) {
     const body = read(`scripts/${script}`);
     assert.ok(body.startsWith("#!/usr/bin/env bash\nset -euo pipefail\n"));
     assert.doesNotMatch(body, /\bgit\s+push\b/);
     assert.match(body, /--dry-run|--allow-dirty/);
   }
+
+  const sopsEntrypoint = read("scripts/sops-entrypoint.sh");
+  assert.match(sopsEntrypoint, /^#!\/bin\/sh\n[\s\S]*\nset -eu\n/);
+  assert.match(sopsEntrypoint, /sops --decrypt --input-type dotenv --output-type dotenv/);
+  assert.match(sopsEntrypoint, /exec "\$@"/);
 
   const audit = read("scripts/audit-repo-state.sh");
   const interfaceConsumers = read("scripts/check-interface-consumers.sh");
