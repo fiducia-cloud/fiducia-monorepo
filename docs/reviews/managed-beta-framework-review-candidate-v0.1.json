@@ -1,0 +1,400 @@
+{
+  "schema_version": 1,
+  "review_issue": "DEN-1654",
+  "service_contract_issue": "DEN-1390",
+  "safety_gate_issue": "DEN-1391",
+  "baseline_commit": "fe0a2cc3d1915ffe64b1e00d4dc9b1b25a585e99",
+  "review_kind": "machine_assisted_independent_technical_review_candidate",
+  "status": "human_signoff_required",
+  "review_scope": {
+    "artifacts": [
+      {
+        "id": "docs/operations/managed-beta-communication-templates.md",
+        "git_blob_sha1": "efb9e29b8034c05658d5e600911a29306f5eb907"
+      },
+      {
+        "id": "docs/operations/managed-beta-incident-runbook.md",
+        "git_blob_sha1": "807a92fd7674fb97ff89b4499886d8ad264b9e71"
+      },
+      {
+        "id": "docs/production/external-probe-location-contract.md",
+        "git_blob_sha1": "a60aed86bacc4192fec14ba965330f8a65ea817a"
+      },
+      {
+        "id": "docs/production/managed-public-beta-service-contract-v0.1.md",
+        "git_blob_sha1": "0a257e96390104b9b440c532893397d9f9c2463a"
+      },
+      {
+        "id": "docs/production/managed-public-beta-slo-derived-series.json",
+        "git_blob_sha1": "6c2fe59e952a3b95a9a471ed5226783d48f51b89"
+      },
+      {
+        "id": "docs/production/managed-public-beta-slos.json",
+        "git_blob_sha1": "205e993d6fdbf6d270a54af7b0a5196f1705f7dd"
+      },
+      {
+        "id": "docs/security/production-safety-release-gate.json",
+        "git_blob_sha1": "f57fdb4def9cdc53ba939c4b34771d0ed1b7d0c5"
+      }
+    ],
+    "slo_ids": [
+      "SLO-AVAIL-01",
+      "SLO-SUCCESS-01",
+      "SLO-READ-01",
+      "SLO-WRITE-01",
+      "SLO-RENEW-01",
+      "SLO-FAILOVER-01",
+      "SLO-REVOKE-01",
+      "SLO-SECRET-01",
+      "SLO-WATCH-01",
+      "SLO-SUPPORT-01"
+    ],
+    "automatic_no_go_invariants": [
+      "cross_tenant_access",
+      "credential_plane_bypass",
+      "secret_disclosure",
+      "stale_fencing_accepted",
+      "committed_state_regression",
+      "unrecoverable_authoritative_state",
+      "mutable_or_unverified_production_artifact",
+      "missing_accountable_operator"
+    ],
+    "required_route_classes": [
+      "dashboard_customer",
+      "dashboard_admin",
+      "public_data_plane",
+      "trusted_edge_to_lb",
+      "lb_to_node",
+      "auth_internal",
+      "raft_peer",
+      "sidecar_brain",
+      "secret_delivery",
+      "observability",
+      "backup_restore",
+      "build_release"
+    ],
+    "safety_gate_ids": [
+      "AUTH-001",
+      "AUTH-002",
+      "AUTH-003",
+      "AUTH-004",
+      "AUTH-005",
+      "AUTH-006",
+      "AUTH-007",
+      "AUTH-008",
+      "KV-001",
+      "KV-002",
+      "KV-003",
+      "KV-004",
+      "KV-005",
+      "RAFT-001",
+      "RAFT-002",
+      "RAFT-003",
+      "RAFT-004",
+      "RAFT-005",
+      "RESTORE-001",
+      "RESTORE-002",
+      "OBS-001",
+      "BUILD-001",
+      "BUILD-002",
+      "BUILD-003",
+      "OPS-001",
+      "OPS-002"
+    ]
+  },
+  "independence": {
+    "machine_assisted_candidate": true,
+    "candidate_authority": "automated_static_review_only",
+    "human_reviewer": null,
+    "human_independence_attested": false,
+    "human_signed_at": null,
+    "note": "This independently generated machine-assisted candidate is not a human signature, legal opinion, production certification, or release authorization."
+  },
+  "slo_review": {
+    "static_structure_reviewed_ids": [
+      "SLO-AVAIL-01",
+      "SLO-SUCCESS-01",
+      "SLO-READ-01",
+      "SLO-WRITE-01",
+      "SLO-RENEW-01",
+      "SLO-FAILOVER-01",
+      "SLO-REVOKE-01",
+      "SLO-SECRET-01",
+      "SLO-WATCH-01",
+      "SLO-SUPPORT-01"
+    ],
+    "expected_source_status": "specified",
+    "expected_evidence_count": 0,
+    "achievement_not_demonstrated_ids": [
+      "SLO-AVAIL-01",
+      "SLO-SUCCESS-01",
+      "SLO-READ-01",
+      "SLO-WRITE-01",
+      "SLO-RENEW-01",
+      "SLO-FAILOVER-01",
+      "SLO-REVOKE-01",
+      "SLO-SECRET-01",
+      "SLO-WATCH-01",
+      "SLO-SUPPORT-01"
+    ],
+    "release_blocking_ids": [
+      "SLO-AVAIL-01",
+      "SLO-SUCCESS-01",
+      "SLO-READ-01",
+      "SLO-WRITE-01",
+      "SLO-RENEW-01",
+      "SLO-FAILOVER-01",
+      "SLO-REVOKE-01",
+      "SLO-SECRET-01",
+      "SLO-WATCH-01",
+      "SLO-SUPPORT-01"
+    ],
+    "disposition": "Static SLO structure is present; exact-candidate queryable and measured evidence is absent."
+  },
+  "gate_review": {
+    "static_structure_reviewed_ids": [
+      "AUTH-001",
+      "AUTH-002",
+      "AUTH-003",
+      "AUTH-004",
+      "AUTH-005",
+      "AUTH-006",
+      "AUTH-007",
+      "AUTH-008",
+      "KV-001",
+      "KV-002",
+      "KV-003",
+      "KV-004",
+      "KV-005",
+      "RAFT-001",
+      "RAFT-002",
+      "RAFT-003",
+      "RAFT-004",
+      "RAFT-005",
+      "RESTORE-001",
+      "RESTORE-002",
+      "OBS-001",
+      "BUILD-001",
+      "BUILD-002",
+      "BUILD-003",
+      "OPS-001",
+      "OPS-002"
+    ],
+    "expected_status": "not_started",
+    "expected_evidence_count": 0,
+    "execution_not_demonstrated_ids": [
+      "AUTH-001",
+      "AUTH-002",
+      "AUTH-003",
+      "AUTH-004",
+      "AUTH-005",
+      "AUTH-006",
+      "AUTH-007",
+      "AUTH-008",
+      "KV-001",
+      "KV-002",
+      "KV-003",
+      "KV-004",
+      "KV-005",
+      "RAFT-001",
+      "RAFT-002",
+      "RAFT-003",
+      "RAFT-004",
+      "RAFT-005",
+      "RESTORE-001",
+      "RESTORE-002",
+      "OBS-001",
+      "BUILD-001",
+      "BUILD-002",
+      "BUILD-003",
+      "OPS-001",
+      "OPS-002"
+    ],
+    "release_blocking_ids": [
+      "AUTH-001",
+      "AUTH-002",
+      "AUTH-003",
+      "AUTH-004",
+      "AUTH-005",
+      "AUTH-006",
+      "AUTH-007",
+      "AUTH-008",
+      "KV-001",
+      "KV-002",
+      "KV-003",
+      "KV-004",
+      "KV-005",
+      "RAFT-001",
+      "RAFT-002",
+      "RAFT-003",
+      "RAFT-004",
+      "RAFT-005",
+      "RESTORE-001",
+      "RESTORE-002",
+      "OBS-001",
+      "BUILD-001",
+      "BUILD-002",
+      "BUILD-003",
+      "OPS-001",
+      "OPS-002"
+    ],
+    "disposition": "Threat, invariant, test, owner, and evidence requirements are declared; execution evidence is absent."
+  },
+  "invariant_review": {
+    "declared_ids": [
+      "cross_tenant_access",
+      "credential_plane_bypass",
+      "secret_disclosure",
+      "stale_fencing_accepted",
+      "committed_state_regression",
+      "unrecoverable_authoritative_state",
+      "mutable_or_unverified_production_artifact",
+      "missing_accountable_operator"
+    ],
+    "execution_demonstrated_ids": [],
+    "release_blocking_ids": [
+      "cross_tenant_access",
+      "credential_plane_bypass",
+      "secret_disclosure",
+      "stale_fencing_accepted",
+      "committed_state_regression",
+      "unrecoverable_authoritative_state",
+      "mutable_or_unverified_production_artifact",
+      "missing_accountable_operator"
+    ],
+    "disposition": "Each automatic no-go invariant is declared but lacks completed exact-candidate proof."
+  },
+  "route_class_review": {
+    "declared_ids": [
+      "dashboard_customer",
+      "dashboard_admin",
+      "public_data_plane",
+      "trusted_edge_to_lb",
+      "lb_to_node",
+      "auth_internal",
+      "raft_peer",
+      "sidecar_brain",
+      "secret_delivery",
+      "observability",
+      "backup_restore",
+      "build_release"
+    ],
+    "live_evidence_demonstrated_ids": [],
+    "release_blocking_ids": [
+      "dashboard_customer",
+      "dashboard_admin",
+      "public_data_plane",
+      "trusted_edge_to_lb",
+      "lb_to_node",
+      "auth_internal",
+      "raft_peer",
+      "sidecar_brain",
+      "secret_delivery",
+      "observability",
+      "backup_restore",
+      "build_release"
+    ],
+    "disposition": "Each required route class is represented in the matrix but lacks completed live evidence."
+  },
+  "findings": [
+    {
+      "id": "F-001",
+      "severity": "critical",
+      "title": "All ten managed-beta SLOs remain specified rather than measured",
+      "disposition": "hold_until_queryable_and_measured",
+      "release_blocking": true,
+      "related_issues": [
+        "DEN-1404",
+        "DEN-1619"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "F-002",
+      "severity": "critical",
+      "title": "All twenty-six production safety rows remain not started",
+      "disposition": "execute_matrix_and_attach_exact_candidate_evidence",
+      "release_blocking": true,
+      "related_issues": [
+        "DEN-1391",
+        "DEN-1392"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "F-003",
+      "severity": "high",
+      "title": "Independent human reviewer identity and signature are absent",
+      "disposition": "obtain_independent_human_signoff_after_revisions",
+      "release_blocking": true,
+      "related_issues": [
+        "DEN-1654"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "F-004",
+      "severity": "high",
+      "title": "Operator roster, incident roles, and tabletop execution are not evidenced",
+      "disposition": "name_operators_and_run_tabletop",
+      "release_blocking": true,
+      "related_issues": [
+        "DEN-1390",
+        "DEN-1394"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "F-005",
+      "severity": "critical",
+      "title": "Restore, one-site failure, lost-device, and rollback evidence is absent",
+      "disposition": "complete_recovery_and_failover_drills",
+      "release_blocking": true,
+      "related_issues": [
+        "DEN-946",
+        "DEN-1392"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "F-006",
+      "severity": "medium",
+      "title": "Measurement completeness must remain separate from objective satisfaction",
+      "disposition": "partially_remediated_but_live_evidence_still_required",
+      "release_blocking": true,
+      "related_issues": [
+        "DEN-1404",
+        "DEN-1654"
+      ],
+      "evidence": [
+        {
+          "kind": "merged_pull_request",
+          "url": "https://github.com/fiducia-cloud/fiducia-e2e/pull/48",
+          "head_commit": "44a3cbdd98b8254e4fa128ba58893eae77973267",
+          "merge_commit": "df447e754ecc3a4845cb0891d19b9327003fa3e2",
+          "status": "merged"
+        }
+      ]
+    }
+  ],
+  "conclusion": {
+    "framework_disposition": "revise_and_hold",
+    "release_decision": "no_go",
+    "framework_approved": false,
+    "release_approved": false,
+    "human_signoff_required": true,
+    "blocking_slo_count": 10,
+    "blocking_gate_count": 26,
+    "blocking_finding_count": 6,
+    "next_required_actions": [
+      "Deploy the availability evaluator and produce a completed exact-candidate measurement.",
+      "Move each SLO through instrumented and queryable to measured with immutable evidence.",
+      "Execute every safety row, recovery drill, alert route, and operator tabletop.",
+      "Obtain a named independent human review against final immutable revisions."
+    ]
+  },
+  "integrity": {
+    "algorithm": "sha256",
+    "canonical_json_sha256": "e22e893df996b7ab362f2663ca9b4db092888eb8c53a7ca2a9101fe6b0401d7f"
+  }
+}
