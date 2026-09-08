@@ -37,6 +37,7 @@ jobs:
         run: >-
           git submodule update --init --depth 1
           apps/fiducia-interfaces
+          apps/fiducia-clients
           apps/fiducia-sync
           apps/fiducia-auth.rs
           apps/fiducia-brain.rs

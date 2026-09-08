@@ -9,8 +9,8 @@
 // silently breaks sync, so this asserts they stay coherent. Pure `node --test`:
 // it only reads files and dynamically imports the pure JS decoder. Requires the
 // three contract submodules to be checked out (public CI initializes them
-// explicitly). Only uninitialized submodules may skip; missing contract files
-// inside an initialized submodule are drift and must fail.
+// explicitly). Local runs may skip uninitialized submodules. GitHub Actions
+// must initialize all three, and missing contract files always fail there.
 
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
@@ -54,7 +54,7 @@ const missing = [
 ].filter((rel) => !existsSync(path.join(root, rel)));
 const uninitialized = ["fiducia-interfaces", "fiducia-sync", "fiducia-clients"]
   .filter((repo) => !existsSync(path.join(root, "apps", repo, ".git")));
-const skip = uninitialized.length
+const skip = process.env.GITHUB_ACTIONS !== "true" && uninitialized.length
   ? `app submodules not checked out: ${uninitialized.join(", ")}; ` +
     `run: git submodule update --init -- apps/fiducia-interfaces apps/fiducia-sync apps/fiducia-clients`
   : false;
