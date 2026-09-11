@@ -19,6 +19,10 @@ sops-private*.txt
 .external/
 .vendor/.zed/
 
+# Independently owned legacy checkouts may remain locally after topology migration.
+apps/fiducia-cli.rs/
+apps/fiducia-infra/
+
 # Scratch space (git worktrees, build scratch, etc.) — see agents.md
 tmp/
 
@@ -42,3 +46,11 @@ tmp
 temp
 tmp/worktrees
 temp/worktrees
+
+# ores-sops dotenv hardening: plaintext dotenv is local-only at every depth;
+# only env/enc/*.env.enc (sops ciphertext) is tracked. See env/README.md.
+**/**/*.env
+env/dec
+
+# machine-local symlink to ORESoftware/my-ai AGENTS.md; never committed
+.ores/

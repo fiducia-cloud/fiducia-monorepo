@@ -12,7 +12,7 @@ import tomllib
 ROOT = Path(__file__).resolve().parents[1]
 EXPECTED_DEPENDENCIES = {
     "fiducia-cloud/fiducia-interfaces",
-    "fiducia/fiducia-clients",
+    "fiducia-cloud/fiducia-clients",
 }
 FORBIDDEN_REPOSITORIES = {"fiducia-infra", "fiducia-cli.rs"}
 
