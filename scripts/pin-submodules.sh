@@ -109,15 +109,24 @@ for i in "${!module_paths[@]}"; do
   module_path="${module_paths[$i]}"
   module_url="$(git config -f .gitmodules --get "submodule.${module_name}.url")"
 
-  if [[ ! -d "$module_path" ]]; then
+  module_root=""
+  if [[ -d "$module_path" ]]; then
+    module_root="$(git -C "$module_path" rev-parse --show-toplevel 2>/dev/null || true)"
+  fi
+
+  # An empty submodule directory sits beneath the superproject, so a plain
+  # `git -C <path>` walks upward and operates on the superproject. Treat the
+  # path as initialized only when Git resolves that exact path as its root.
+  if [[ "$module_root" != "$repo_root/$module_path" ]]; then
     if [[ "$dry_run" -eq 1 ]]; then
       echo "would initialize $module_path"
     else
       git submodule update --init -- "$module_path"
+      module_root="$(git -C "$module_path" rev-parse --show-toplevel)"
     fi
   fi
 
-  if [[ -d "$module_path" ]] && [[ -n "$(git -C "$module_path" status --porcelain=v1)" ]]; then
+  if [[ "$module_root" == "$repo_root/$module_path" ]] && [[ -n "$(git -C "$module_path" status --porcelain=v1)" ]]; then
     dirty_modules+=("$module_path")
   fi
 
