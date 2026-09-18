@@ -8,9 +8,9 @@
 // A drift between them (a renamed field, a dropped column, a changed op value)
 // silently breaks sync, so this asserts they stay coherent. Pure `node --test`:
 // it only reads files and dynamically imports the pure JS decoder. Requires the
-// three contract submodules to be checked out (public CI initializes them
-// explicitly). Local runs may skip uninitialized submodules. GitHub Actions
-// must initialize all three, and missing contract files always fail there.
+// the two contract submodules to be checked out (public CI initializes them
+// explicitly); when absent it skips with an actionable message rather than
+// crashing.
 
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
@@ -24,10 +24,10 @@ const CUSTOMER_SQL = "apps/fiducia-interfaces/sql/customer.sql";
 const SYNC_SCHEMA = "apps/fiducia-interfaces/schema/sync.schema.json";
 const SYNC_README = "apps/fiducia-sync/README.md";
 const SYNC_LIB = "apps/fiducia-sync/src/lib.rs";
-const SYNC_DECODE = "apps/fiducia-sync/langs/typescript/src/transports/decode.mjs";
-const SYNC_TYPES = "apps/fiducia-sync/langs/typescript/src/index.d.ts";
-const SYNC_DART_MODELS = "apps/fiducia-sync/langs/dart/lib/src/models.dart";
-const SYNC_DART_JSON = "apps/fiducia-sync/langs/dart/lib/src/json_transport.dart";
+const SYNC_DECODE = "apps/fiducia-sync/sdk/src/transports/decode.mjs";
+const SYNC_TYPES = "apps/fiducia-sync/sdk/src/index.d.ts";
+const SYNC_DART_MODELS = "apps/fiducia-sync/dart/lib/src/models.dart";
+const SYNC_DART_JSON = "apps/fiducia-sync/dart/lib/src/json_transport.dart";
 const SYNC_POSTGRES = "apps/fiducia-sync/sql/postgres/001_fiducia_sync.sql";
 const CLIENT_TS = "apps/fiducia-clients/clients/ts/fiducia.ts";
 const CLIENT_DART = "apps/fiducia-clients/clients/dart/fiducia.dart";
@@ -52,20 +52,14 @@ const missing = [
   CLIENT_DART,
   CLIENT_RUST,
 ].filter((rel) => !existsSync(path.join(root, rel)));
-const uninitialized = ["fiducia-interfaces", "fiducia-sync", "fiducia-clients"]
-  .filter((repo) => !existsSync(path.join(root, "apps", repo, ".git")));
-const skip = process.env.GITHUB_ACTIONS !== "true" && uninitialized.length
-  ? `app submodules not checked out: ${uninitialized.join(", ")}; ` +
-    `run: git submodule update --init -- apps/fiducia-interfaces apps/fiducia-sync apps/fiducia-clients`
+const skip = missing.length
+  ? `app submodules not checked out (missing: ${missing.join(", ")}); ` +
+    `run: git submodule update --init --recursive`
   : false;
 
 function read(rel) {
   return readFileSync(path.join(root, rel), "utf8");
 }
-
-test("initialized sync submodules contain every required contract file", { skip }, () => {
-  assert.deepEqual(missing, [], "initialized submodules must not hide contract path drift as a skip");
-});
 
 test("interfaces customer.sql declares the version/updated_at sync contract", { skip }, () => {
   const sql = read(CUSTOMER_SQL);

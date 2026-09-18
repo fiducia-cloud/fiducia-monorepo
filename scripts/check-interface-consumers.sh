@@ -9,8 +9,7 @@ set -euo pipefail
 # This script only builds/tests local checked-out sources. It has no Git or
 # cloud mutation commands. `public` is suitable for ordinary CI after the
 # public submodules are initialized; `full` additionally checks the protected
-# application consumers that are owned by this monorepo. The independently
-# packaged CLI validates its interface compatibility in its own repository.
+# application consumers after a recursive authenticated checkout.
 
 usage() {
   cat <<'EOF'
@@ -44,6 +43,7 @@ private_consumers=(
   '1.95.0 fiducia-auth.rs'
   '1.95.0 fiducia-admin.rs'
   '1.97.0 fiducia-customer.rs'
+  '1.95.0 fiducia-cli.rs'
   '1.95.0 fiducia-node-sidecar.rs'
 )
 consumers=("${public_consumers[@]}")
