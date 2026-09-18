@@ -10,7 +10,6 @@
  "apps/fiducia-customer.rs",
  "apps/fiducia-e2e",
  "apps/fiducia-edge",
- "apps/fiducia-infra",
  "apps/fiducia-interfaces",
  "apps/fiducia-lambda-service.rs",
  "apps/fiducia-load-balance.rs",
@@ -25,7 +24,5 @@
  "apps/fiducia-routing.rs",
  "apps/fiducia-sync",
  "apps/fiducia-telemetry.rs",
- "apps/fiducia-test-config",
- "tmp/worktrees/control-plane-products",
- "tmp/worktrees/merge-main"
+ "apps/fiducia-test-config"
 ]
