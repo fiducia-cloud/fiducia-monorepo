@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # Tooling image for submodule pinning and branch coordination workflows.
-FROM debian:bookworm-slim@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587
+FROM debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc
 LABEL org.fiducia.runtime-profile="tool-runner-nonroot"
 RUN apt-get update \
     && apt-get install -y --no-install-recommends bash git ca-certificates \
